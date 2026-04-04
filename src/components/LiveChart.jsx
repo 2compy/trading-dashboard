@@ -1,9 +1,14 @@
 import { useEffect, useRef } from 'react'
 import { createChart, CrosshairMode, CandlestickSeries } from 'lightweight-charts'
-import { useStore } from '../store'
+import { useStore, TIMEFRAMES } from '../store'
 
 export default function LiveChart() {
-  const { futures, selectedSymbol, setSelectedSymbol, candleData, livePrice, priceChange } = useStore()
+  const {
+    futures, selectedSymbol, setSelectedSymbol,
+    candleData, livePrice, priceChange,
+    timeframe, setTimeframe, fetchCandles,
+  } = useStore()
+
   const chartContainerRef = useRef(null)
   const chartRef = useRef(null)
   const seriesRef = useRef(null)
@@ -16,7 +21,7 @@ export default function LiveChart() {
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: '#1f2937' },
       timeScale: { borderColor: '#1f2937', timeVisible: true },
-      width: chartContainerRef.current.clientWidth,
+      width:  chartContainerRef.current.clientWidth,
       height: chartContainerRef.current.clientHeight,
     })
     const series = chart.addSeries(CandlestickSeries, {
@@ -24,13 +29,13 @@ export default function LiveChart() {
       borderUpColor: '#22c55e', borderDownColor: '#ef4444',
       wickUpColor: '#22c55e', wickDownColor: '#ef4444',
     })
-    chartRef.current = chart
+    chartRef.current  = chart
     seriesRef.current = series
 
     const ro = new ResizeObserver(() => {
       if (!chartContainerRef.current) return
       chart.applyOptions({
-        width: chartContainerRef.current.clientWidth,
+        width:  chartContainerRef.current.clientWidth,
         height: chartContainerRef.current.clientHeight,
       })
     })
@@ -38,49 +43,76 @@ export default function LiveChart() {
     return () => { chart.remove(); ro.disconnect() }
   }, [])
 
+  // Reload candles when symbol or timeframe changes
   useEffect(() => {
     if (!seriesRef.current) return
-    seriesRef.current.setData(candleData[selectedSymbol])
+    seriesRef.current.setData(candleData[selectedSymbol] || [])
     chartRef.current?.timeScale().fitContent()
-  }, [selectedSymbol])
+  }, [selectedSymbol, candleData])
 
+  // Fetch live candles on symbol/timeframe change
   useEffect(() => {
-    if (!seriesRef.current) return
-    const candles = candleData[selectedSymbol]
-    if (candles?.length) seriesRef.current.update(candles[candles.length - 1])
-  }, [candleData, selectedSymbol])
+    fetchCandles(selectedSymbol, timeframe)
+  }, [selectedSymbol, timeframe])
+
+  const handleTimeframe = (tf) => {
+    setTimeframe(tf)
+    fetchCandles(selectedSymbol, tf)
+  }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 12 }}>
-      {/* Symbol selector */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {futures.map(f => {
-          const change = priceChange[f.symbol]
-          const isUp = change >= 0
-          const active = selectedSymbol === f.symbol
-          return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 10 }}>
+
+      {/* Top bar: symbols + timeframes */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+        {/* Symbol buttons */}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {futures.map(f => {
+            const change = priceChange[f.symbol]
+            const isUp   = change >= 0
+            const active = selectedSymbol === f.symbol
+            return (
+              <button
+                key={f.symbol}
+                onClick={() => setSelectedSymbol(f.symbol)}
+                style={{
+                  padding: '7px 12px', borderRadius: 9, border: '1px solid',
+                  borderColor: active ? '#2563eb' : '#1f2937',
+                  background:  active ? '#1d4ed8' : '#111827',
+                  color: active ? '#fff' : '#9ca3af',
+                  cursor: 'pointer', textAlign: 'left',
+                }}
+              >
+                <div style={{ fontWeight: 700, fontSize: 12 }}>{f.symbol}</div>
+                <div style={{ fontSize: 11, color: isUp ? '#4ade80' : '#f87171', marginTop: 2 }}>
+                  {livePrice[f.symbol]?.toFixed(2)} {isUp ? '▲' : '▼'} {Math.abs(change).toFixed(2)}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Timeframe buttons */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          {TIMEFRAMES.map(tf => (
             <button
-              key={f.symbol}
-              onClick={() => setSelectedSymbol(f.symbol)}
+              key={tf}
+              onClick={() => handleTimeframe(tf)}
               style={{
-                padding: '8px 14px', borderRadius: 10, border: '1px solid',
-                borderColor: active ? '#2563eb' : '#1f2937',
-                background: active ? '#1d4ed8' : '#111827',
-                color: active ? '#fff' : '#9ca3af',
-                cursor: 'pointer', textAlign: 'left',
-                transition: 'all 0.15s',
+                padding: '6px 12px', borderRadius: 7, border: '1px solid',
+                borderColor: timeframe === tf ? '#2563eb' : '#1f2937',
+                background:  timeframe === tf ? '#1d4ed8' : '#111827',
+                color: timeframe === tf ? '#fff' : '#9ca3af',
+                cursor: 'pointer', fontSize: 12, fontWeight: 600,
               }}
             >
-              <div style={{ fontWeight: 700, fontSize: 13 }}>{f.symbol}</div>
-              <div style={{ fontSize: 11, color: isUp ? '#4ade80' : '#f87171', marginTop: 2 }}>
-                {livePrice[f.symbol]?.toFixed(2)} {isUp ? '▲' : '▼'} {Math.abs(change).toFixed(2)}
-              </div>
+              {tf}
             </button>
-          )
-        })}
+          ))}
+        </div>
       </div>
 
-      {/* Chart container */}
+      {/* Chart */}
       <div
         ref={chartContainerRef}
         style={{ flex: 1, borderRadius: 12, overflow: 'hidden', border: '1px solid #1f2937', background: '#030712' }}
