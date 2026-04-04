@@ -53,20 +53,6 @@ async function fetch1mRecent(ticker) {
   } catch { return [] }
 }
 
-  // Polygon returns { t: timestamp_ms, o, h, l, c }
-  const seen = new Set()
-  return results
-    .filter(r => { if (seen.has(r.t)) return false; seen.add(r.t); return true })
-    .sort((a, b) => a.t - b.t)
-    .map(r => ({
-      time:  Math.floor(r.t / 1000),
-      open:  parseFloat(r.o.toFixed(4)),
-      high:  parseFloat(r.h.toFixed(4)),
-      low:   parseFloat(r.l.toFixed(4)),
-      close: parseFloat(r.c.toFixed(4)),
-    }))
-}
-
 function parseCandles(data) {
   const result = data?.chart?.result?.[0]
   if (!result) return []
