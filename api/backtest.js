@@ -61,24 +61,27 @@ function getETDateStr(ts) {
   }).format(new Date(ts * 1000))
 }
 
-function getPrevDayHL(candles1h, currentTs) {
-  const today = getETDateStr(currentTs)
+// Build daily H/L map from 5m candles (no separate 1h fetch needed)
+function buildDailyHL(candles5m) {
   const byDay = {}
-  for (const c of candles1h) {
+  for (const c of candles5m) {
     const d = getETDateStr(c.time)
-    if (!byDay[d]) byDay[d] = []
-    byDay[d].push(c)
+    if (!byDay[d]) byDay[d] = { high: c.high, low: c.low }
+    else {
+      if (c.high > byDay[d].high) byDay[d].high = c.high
+      if (c.low  < byDay[d].low)  byDay[d].low  = c.low
+    }
   }
-  const days = Object.keys(byDay).sort()
-  const todayIdx = days.indexOf(today)
-  if (todayIdx <= 0) return null
-  const prevDay  = days[todayIdx - 1]
-  const candles  = byDay[prevDay]
-  return {
-    high: Math.max(...candles.map(c => c.high)),
-    low:  Math.min(...candles.map(c => c.low)),
-    date: prevDay,
-  }
+  return byDay
+}
+
+function getPrevDayHL(dailyHL, currentTs) {
+  const today = getETDateStr(currentTs)
+  const days  = Object.keys(dailyHL).sort()
+  const idx   = days.indexOf(today)
+  if (idx <= 0) return null
+  const prev = days[idx - 1]
+  return { ...dailyHL[prev], date: prev }
 }
 
 function detectSwings(candles, lookback = 3) {
@@ -151,13 +154,14 @@ function bsFloor(candles, t) {
 }
 
 // ── Main backtest: 5M sweep+BOS+FVG, 1M IFVG entry (falls back to 5M if no 1M data) ──
-function runBacktest(candles1h, candles5m, candles1m, symbol) {
+function runBacktest(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
   const trades     = []
   const has1m      = candles1m.length > 0
 
-  if (!candles1h.length || !candles5m.length) return trades
+  if (!candles5m.length) return trades
 
+  const dailyHL = buildDailyHL(candles5m)
   let lastTradeTime = 0
 
   for (let i = 10; i < candles5m.length - 1; i++) {
@@ -165,8 +169,8 @@ function runBacktest(candles1h, candles5m, candles1m, symbol) {
 
     if (now5m.time - lastTradeTime < 3600) continue
 
-    // Step 1: Previous day H/L
-    const pdhl = getPrevDayHL(candles1h, now5m.time)
+    // Step 1: Previous day H/L (derived from 5m candles)
+    const pdhl = getPrevDayHL(dailyHL, now5m.time)
     if (!pdhl) continue
 
     // Step 2: Liquidity sweep on recent 5M
@@ -277,14 +281,13 @@ export default async function handler(req, res) {
   if (!ticker) return res.status(400).json({ error: `Unknown symbol: ${symbol}` })
 
   try {
-    // 3 calls total: 1h (6mo) + 5m (60d) + 1m (1 week)
-    const [candles1h, candles5m, candles1m] = await Promise.all([
-      fetchTF(ticker, '1h', '6mo'),
+    // 2 calls: 5m (60d) + 1m (7d)
+    const [candles5m, candles1m] = await Promise.all([
       fetchTF(ticker, '5m', '60d'),
       fetch1mRecent(ticker),
     ])
 
-    const trades   = runBacktest(candles1h, candles5m, candles1m, symbol)
+    const trades   = runBacktest(candles5m, candles1m, symbol)
     const wins     = trades.filter(t => t.outcome === 'win').length
     const losses   = trades.filter(t => t.outcome === 'loss').length
     const winRate  = trades.length ? ((wins / trades.length) * 100).toFixed(1) : '0.0'
@@ -292,12 +295,12 @@ export default async function handler(req, res) {
 
     const earliest = candles5m.length ? new Date(candles5m[0].time * 1000).toISOString().split('T')[0] : null
     const latest   = candles5m.length ? new Date(candles5m[candles5m.length - 1].time * 1000).toISOString().split('T')[0] : null
-    const dataNote = `5m: ${earliest} → ${latest} | 1m IFVG entry (last 7d) | Daily H/L Sweep`
+    const dataNote = `5m: ${earliest} → ${latest} | 1m IFVG entry (7d) | Daily H/L Sweep`
 
     res.setHeader('Cache-Control', 's-maxage=3600')
     return res.status(200).json({
       symbol, trades, wins, losses, winRate, totalPnl, dataNote,
-      candles1h, candles5m, candles1m,
+      candles5m, candles1m,
     })
   } catch (err) {
     return res.status(500).json({ error: err.message })

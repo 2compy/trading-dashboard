@@ -22,26 +22,27 @@ function getETDateStr(ts) {
   }).format(new Date(ts * 1000))
 }
 
-// ── Previous day high/low from 1H candles ─────────────────────────────────────
-export function getPrevDayHL(candles1h, currentTs) {
-  const today = getETDateStr(currentTs)
-  // group by ET date
+// ── Daily H/L from 5M candles ────────────────────────────────────────────────
+export function buildDailyHL(candles5m) {
   const byDay = {}
-  for (const c of candles1h) {
+  for (const c of candles5m) {
     const d = getETDateStr(c.time)
-    if (!byDay[d]) byDay[d] = []
-    byDay[d].push(c)
+    if (!byDay[d]) byDay[d] = { high: c.high, low: c.low }
+    else {
+      if (c.high > byDay[d].high) byDay[d].high = c.high
+      if (c.low  < byDay[d].low)  byDay[d].low  = c.low
+    }
   }
-  const days = Object.keys(byDay).sort()
-  const todayIdx = days.indexOf(today)
-  if (todayIdx <= 0) return null
-  const prevDay = days[todayIdx - 1]
-  const candles = byDay[prevDay]
-  return {
-    high: Math.max(...candles.map(c => c.high)),
-    low:  Math.min(...candles.map(c => c.low)),
-    date: prevDay,
-  }
+  return byDay
+}
+
+export function getPrevDayHL(dailyHL, currentTs) {
+  const today = getETDateStr(currentTs)
+  const days  = Object.keys(dailyHL).sort()
+  const idx   = days.indexOf(today)
+  if (idx <= 0) return null
+  const prev = days[idx - 1]
+  return { ...dailyHL[prev], date: prev }
 }
 
 // ── Swing Highs & Lows ────────────────────────────────────────────────────────
@@ -141,12 +142,13 @@ export const CONTRACT_MULTIPLIER = {
 const MIN_RR = 2
 
 // ── Full backtest ─────────────────────────────────────────────────────────────
-export function runBacktest(candles1h, candles5m, candles1m, symbol = 'MES1!') {
+export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
   const trades     = []
 
-  if (!candles1h.length || !candles5m.length || !candles1m.length) return trades
+  if (!candles5m.length || !candles1m.length) return trades
 
+  const dailyHL = buildDailyHL(candles5m)
   let lastSweepTime = 0
 
   for (let i = 10; i < candles5m.length - 1; i++) {
@@ -156,7 +158,7 @@ export function runBacktest(candles1h, candles5m, candles1m, symbol = 'MES1!') {
     if (now5m.time - lastSweepTime < 3600) continue
 
     // ── Step 1: Get previous day H/L ────────────────────────────────────────
-    const pdhl = getPrevDayHL(candles1h, now5m.time)
+    const pdhl = getPrevDayHL(dailyHL, now5m.time)
     if (!pdhl) continue
 
     // ── Step 2: Detect liquidity sweep on 5M ────────────────────────────────
@@ -273,14 +275,15 @@ export function runBacktest(candles1h, candles5m, candles1m, symbol = 'MES1!') {
 }
 
 // ── Live signal ───────────────────────────────────────────────────────────────
-export function getLiveSignal(candles1h, candles5m, candles1m, symbol) {
-  if (!candles1h?.length || !candles5m?.length || !candles1m?.length) return null
+export function getLiveSignal(candles5m, candles1m) {
+  if (!candles5m?.length || !candles1m?.length) return null
 
   const nowTs  = candles5m[candles5m.length - 1]?.time
   if (!nowTs) return null
 
-  // Step 1: Previous day H/L
-  const pdhl = getPrevDayHL(candles1h, nowTs)
+  // Step 1: Previous day H/L derived from 5m candles
+  const dailyHL = buildDailyHL(candles5m)
+  const pdhl    = getPrevDayHL(dailyHL, nowTs)
   if (!pdhl) return null
 
   // Step 2: Sweep on recent 5M

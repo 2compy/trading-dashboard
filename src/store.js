@@ -57,10 +57,9 @@ function generateCandles(base, count = 200) {
 import { getLiveSignal } from './utils/strategy'
 
 function runStrategy(candlesBySymbol, symbol) {
-  const c1h = candlesBySymbol[symbol]?.['1h'] || []
   const c5m = candlesBySymbol[symbol]?.['5m'] || []
   const c1m = candlesBySymbol[symbol]?.['1m'] || []
-  return getLiveSignal(c1h, c5m, c1m)
+  return getLiveSignal(c5m, c1m)
 }
 
 const USE_LIVE = !!import.meta.env.VITE_USE_LIVE_API
@@ -90,7 +89,7 @@ export const useStore = create((set, get) => ({
       set(state => ({
         mtfCandles: {
           ...state.mtfCandles,
-          [symbol]: { '1h': data.candles1h, '5m': data.candles5m, '1m': data.candles1m },
+          [symbol]: { '5m': data.candles5m, '1m': data.candles1m },
         }
       }))
     } catch (_) {}
