@@ -23,7 +23,10 @@ export default function Backtest({ onBack }) {
 
     try {
       const res  = await fetch(`/api/backtest?symbol=${encodeURIComponent(symbol)}`)
-      const data = await res.json()
+      const text = await res.text()
+      let data
+      try { data = JSON.parse(text) }
+      catch { throw new Error(text.slice(0, 200)) }
       if (data.error) throw new Error(data.error)
 
       // All computation done server-side — just use the result directly
@@ -77,7 +80,7 @@ export default function Backtest({ onBack }) {
 
         <div style={{ marginLeft: 'auto' }}>
           <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>
-            Data: 1H (1y) · 5M (60d) · 1M (7d) · SL $200 · TP $300 · 1 unit
+            Data: 1H (6mo) · 5M (60d) · 1M (7d) · RR 2:1 min
           </div>
           <button
             onClick={runTest}
@@ -112,12 +115,10 @@ export default function Backtest({ onBack }) {
           {/* Summary stats */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
             {[
-              { label: 'Win Rate',      value: `${results.winRate}%`,   color: parseFloat(results.winRate) >= 50 ? '#4ade80' : '#f87171', big: true },
-              { label: 'Total Trades', value: results.trades.length,   color: '#f9fafb' },
-              { label: 'Wins',         value: results.wins,            color: '#4ade80' },
-              { label: 'Losses',       value: results.losses,          color: '#f87171' },
-              { label: 'Gross Profit', value: `$${results.grossWin.toLocaleString()}`,  color: '#4ade80' },
-              { label: 'Gross Loss',   value: `-$${results.grossLoss.toLocaleString()}`, color: '#f87171' },
+              { label: 'Win Rate',      value: `${results.winRate}%`,  color: parseFloat(results.winRate) >= 50 ? '#4ade80' : '#f87171', big: true },
+              { label: 'Total Trades', value: results.trades.length,  color: '#f9fafb' },
+              { label: 'Wins',         value: results.wins,           color: '#4ade80' },
+              { label: 'Losses',       value: results.losses,         color: '#f87171' },
               { label: 'Net P&L',      value: `${results.totalPnl >= 0 ? '+' : ''}$${results.totalPnl.toLocaleString()}`, color: results.totalPnl >= 0 ? '#4ade80' : '#f87171', big: true },
             ].map(s => (
               <div key={s.label} className="card" style={{ textAlign: 'center' }}>

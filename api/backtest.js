@@ -270,10 +270,11 @@ function runBacktest(candles1h, candles5m, candles1m, symbol) {
 // ── Handler ───────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Content-Type', 'application/json')
 
   const { symbol } = req.query
-  const ticker = SYMBOL_MAP[symbol]
-  if (!ticker) return res.status(400).json({ error: 'Unknown symbol' })
+  const ticker = SYMBOL_MAP[symbol?.toUpperCase()] || SYMBOL_MAP[symbol]
+  if (!ticker) return res.status(400).json({ error: `Unknown symbol: ${symbol}` })
 
   try {
     // 3 calls total: 1h (6mo) + 5m (60d) + 1m (1 week)
