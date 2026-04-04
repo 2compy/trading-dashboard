@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { useStore, FUTURES } from '../store'
-import { runBacktest } from '../utils/strategy'
 
 function fmt(ts) {
   if (!ts) return '—'
@@ -27,15 +26,8 @@ export default function Backtest({ onBack }) {
       const data = await res.json()
       if (data.error) throw new Error(data.error)
 
-      const trades    = runBacktest(data.candles1h, data.candles5m, data.candles1m, symbol)
-      const wins      = trades.filter(t => t.outcome === 'win').length
-      const losses    = trades.filter(t => t.outcome === 'loss').length
-      const winRate   = trades.length ? ((wins / trades.length) * 100).toFixed(1) : '0.0'
-      const totalPnl  = trades.reduce((s, t) => s + t.pnlDollars, 0)
-      const grossWin  = trades.filter(t => t.outcome === 'win').length * 300
-      const grossLoss = trades.filter(t => t.outcome === 'loss').length * 200
-
-      setResults({ trades, wins, losses, winRate, totalPnl, grossWin, grossLoss })
+      // All computation done server-side — just use the result directly
+      setResults(data)
     } catch (err) {
       setError(err.message)
     } finally {
