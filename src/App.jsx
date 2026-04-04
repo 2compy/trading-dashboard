@@ -1,14 +1,17 @@
 import { useState, useEffect } from 'react'
-import { useStore } from './store'
+import { useStore, FUTURES } from './store'
 import LiveChart from './components/LiveChart'
 import TradeManager from './components/TradeManager'
 import TradeLogs from './components/TradeLogs'
 import Portfolio from './components/Portfolio'
+import Backtest from './components/Backtest'
+
 const TABS = [
   { id: 'charts',    label: 'Live Charts',   icon: '📈' },
   { id: 'trades',    label: 'Trade Manager', icon: '⚙️' },
   { id: 'logs',      label: 'Trade Logs',    icon: '📋' },
-  { id: 'portfolio', label: 'Portfolio',      icon: '💼' },
+  { id: 'portfolio', label: 'Portfolio',     icon: '💼' },
+  { id: 'backtest',  label: 'Backtest',      icon: '🔬' },
 ]
 
 const USE_LIVE = !!import.meta.env.VITE_USE_LIVE_API
@@ -16,7 +19,7 @@ const USE_LIVE = !!import.meta.env.VITE_USE_LIVE_API
 export default function App() {
   const [tab, setTab] = useState('charts')
   const {
-    tickPrice, advanceCandle, pollQuotes, fetchCandles,
+    tickPrice, advanceCandle, pollQuotes, fetchCandles, fetchMTFCandles,
     trades, apiError, selectedSymbol, timeframe,
     masterSwitch, toggleMasterSwitch, runAutoTrade,
     marketOpen, refreshMarketStatus,
@@ -30,34 +33,48 @@ export default function App() {
     return () => { clearInterval(tick); clearInterval(candle) }
   }, [])
 
-  // Live API mode
+  // Live API — chart candles
   useEffect(() => {
     if (!USE_LIVE) return
     fetchCandles(selectedSymbol, timeframe)
   }, [selectedSymbol, timeframe])
 
+  // Live API — quotes
   useEffect(() => {
     if (!USE_LIVE) return
-    pollQuotes(true) // force fetch on load so last known prices always show
+    pollQuotes(true)
     const interval = setInterval(pollQuotes, 2000)
     return () => clearInterval(interval)
   }, [])
 
-  // Refresh market status every minute
+  // Fetch MTF candles for strategy on load and every 5 min
+  useEffect(() => {
+    if (!USE_LIVE) return
+    FUTURES.forEach(f => fetchMTFCandles(f.symbol))
+    const interval = setInterval(() => {
+      FUTURES.forEach(f => fetchMTFCandles(f.symbol))
+    }, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Market status refresh
   useEffect(() => {
     refreshMarketStatus()
     const interval = setInterval(refreshMarketStatus, 60000)
     return () => clearInterval(interval)
   }, [])
 
-  // Auto-trade on interval (30s) when master switch is ON
+  // Auto-trade every 30s when master switch is ON
   useEffect(() => {
     if (!masterSwitch) return
     const interval = setInterval(runAutoTrade, 30000)
     return () => clearInterval(interval)
   }, [masterSwitch])
 
-  const openCount = trades.filter(t => t.status === 'OPEN').length
+  const openCount  = trades.filter(t => t.status === 'OPEN').length
+  const closed     = trades.filter(t => t.status === 'CLOSED')
+  const wins       = closed.filter(t => t.pnl > 0).length
+  const winRate    = closed.length ? ((wins / closed.length) * 100).toFixed(0) : null
 
   return (
     <div className="app-shell">
@@ -69,6 +86,17 @@ export default function App() {
         </div>
 
         <div className="header-right">
+          {/* Win rate badge */}
+          {winRate !== null && (
+            <div style={{
+              fontSize: 12, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
+              background: parseInt(winRate) >= 50 ? '#14532d' : '#450a0a',
+              color: parseInt(winRate) >= 50 ? '#4ade80' : '#f87171',
+            }}>
+              {winRate}% WR
+            </div>
+          )}
+
           {/* Market status */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{
@@ -77,10 +105,7 @@ export default function App() {
               display: 'inline-block',
               animation: marketOpen ? 'pulse 2s ease-in-out infinite' : 'none',
             }} />
-            <span style={{
-              fontSize: 11, fontWeight: 700, letterSpacing: '0.5px',
-              color: marketOpen ? '#22c55e' : '#ef4444',
-            }}>
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.5px', color: marketOpen ? '#22c55e' : '#ef4444' }}>
               {marketOpen ? (USE_LIVE ? 'LIVE' : 'SIM') : 'CLOSED'}
             </span>
           </div>
@@ -95,26 +120,19 @@ export default function App() {
             <button
               onClick={toggleMasterSwitch}
               style={{
-                position: 'relative',
-                width: 52, height: 28, borderRadius: 14, border: 'none',
-                background: masterSwitch ? '#16a34a' : '#374151',
-                cursor: 'pointer', transition: 'background 0.2s',
-                flexShrink: 0,
+                position: 'relative', width: 52, height: 28, borderRadius: 14,
+                border: 'none', background: masterSwitch ? '#16a34a' : '#374151',
+                cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0,
               }}
             >
               <span style={{
                 position: 'absolute', top: 4,
                 left: masterSwitch ? 28 : 4,
                 width: 20, height: 20, borderRadius: '50%',
-                background: '#fff', transition: 'left 0.2s',
-                display: 'block',
+                background: '#fff', transition: 'left 0.2s', display: 'block',
               }} />
             </button>
-            <span style={{
-              fontSize: 11, fontWeight: 700,
-              color: masterSwitch ? '#4ade80' : '#6b7280',
-              minWidth: 26,
-            }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: masterSwitch ? '#4ade80' : '#6b7280', minWidth: 26 }}>
               {masterSwitch ? 'ON' : 'OFF'}
             </span>
           </div>
@@ -126,27 +144,21 @@ export default function App() {
           Markets closed — closed Fri 16:00 ET through Sun 18:00 ET
         </div>
       )}
-
       {apiError && (
         <div style={{ background: '#450a0a', color: '#fca5a5', padding: '6px 20px', fontSize: 12 }}>
           API error: {apiError} — showing simulated data
         </div>
       )}
-
       {masterSwitch && (
         <div style={{ background: '#14532d', color: '#bbf7d0', padding: '5px 20px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
           <span>⚡</span>
-          <span>Auto-trading is <strong>ON</strong> — strategy running every 30s across all symbols</span>
+          <span>Auto-trading <strong>ON</strong> — ICT strategy running every 30s</span>
         </div>
       )}
 
       <nav className="tab-nav">
         {TABS.map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`tab-btn ${tab === t.id ? 'tab-btn--active' : ''}`}
-          >
+          <button key={t.id} onClick={() => setTab(t.id)} className={`tab-btn ${tab === t.id ? 'tab-btn--active' : ''}`}>
             <span>{t.icon}</span>
             <span>{t.label}</span>
           </button>
@@ -158,6 +170,7 @@ export default function App() {
         {tab === 'trades'    && <TradeManager />}
         {tab === 'logs'      && <TradeLogs />}
         {tab === 'portfolio' && <Portfolio />}
+        {tab === 'backtest'  && <Backtest onBack={() => setTab('charts')} />}
       </main>
     </div>
   )

@@ -54,25 +54,24 @@ function generateCandles(base, count = 200) {
   return candles
 }
 
-// Simple placeholder strategy — replace with your own logic
-// Returns 'LONG', 'SHORT', or null
-function runStrategy(candles) {
-  if (candles.length < 5) return null
-  const last = candles.slice(-5)
-  const bullish = last.every(c => c.close >= c.open)
-  const bearish = last.every(c => c.close <= c.open)
-  if (bullish) return 'LONG'
-  if (bearish) return 'SHORT'
-  return null
+import { getLiveSignal } from './utils/strategy'
+
+function runStrategy(candlesBySymbol, symbol) {
+  const c1h = candlesBySymbol[symbol]?.['1h'] || []
+  const c5m = candlesBySymbol[symbol]?.['5m'] || []
+  const c1m = candlesBySymbol[symbol]?.['1m'] || []
+  return getLiveSignal(c1h, c5m, c1m)
 }
 
 const USE_LIVE = !!import.meta.env.VITE_USE_LIVE_API
 
 export const useStore = create((set, get) => ({
   futures: FUTURES,
-  selectedSymbol: 'ES',
+  selectedSymbol: 'MES1!',
   timeframe: '1m',
   candleData: Object.fromEntries(FUTURES.map(f => [f.symbol, generateCandles(f.base)])),
+  // Multi-TF candles for strategy signals: { 'MES1!': { '1h': [...], '5m': [...], '1m': [...] } }
+  mtfCandles: {},
   livePrice: Object.fromEntries(FUTURES.map(f => [f.symbol, f.base])),
   priceChange: Object.fromEntries(FUTURES.map(f => [f.symbol, 0])),
   apiError: null,
@@ -83,6 +82,20 @@ export const useStore = create((set, get) => ({
   setTimeframe: (tf) => set({ timeframe: tf }),
 
   // --- Live API ---
+  fetchMTFCandles: async (symbol) => {
+    try {
+      const res  = await fetch(`/api/backtest?symbol=${encodeURIComponent(symbol)}`)
+      const data = await res.json()
+      if (data.error) return
+      set(state => ({
+        mtfCandles: {
+          ...state.mtfCandles,
+          [symbol]: { '1h': data.candles1h, '5m': data.candles5m, '1m': data.candles1m },
+        }
+      }))
+    } catch (_) {}
+  },
+
   fetchCandles: async (symbol, timeframe) => {
     if (!USE_LIVE) return
     try {
@@ -230,8 +243,7 @@ export const useStore = create((set, get) => ({
 
     FUTURES.forEach(f => {
       if (!state.symbolEnabled[f.symbol]) return
-      const candles = state.candleData[f.symbol]
-      const signal = runStrategy(candles)
+      const signal = runStrategy(state.mtfCandles, f.symbol)
       if (!signal) return
 
       const price = state.livePrice[f.symbol]
