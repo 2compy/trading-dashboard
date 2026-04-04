@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { createChart, CrosshairMode } from 'lightweight-charts'
+import { createChart, CrosshairMode, CandlestickSeries } from 'lightweight-charts'
 import { useStore } from '../store'
 
 export default function LiveChart() {
@@ -19,7 +19,7 @@ export default function LiveChart() {
       width: chartContainerRef.current.clientWidth,
       height: chartContainerRef.current.clientHeight,
     })
-    const series = chart.addCandlestickSeries({
+    const series = chart.addSeries(CandlestickSeries, {
       upColor: '#22c55e', downColor: '#ef4444',
       borderUpColor: '#22c55e', borderDownColor: '#ef4444',
       wickUpColor: '#22c55e', wickDownColor: '#ef4444',
