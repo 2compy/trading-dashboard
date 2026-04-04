@@ -72,7 +72,25 @@ export function detectFVGs(candles) {
   return fvgs
 }
 
-// ── IFVG: FVG that has been tapped at its midpoint (flipped) ─────────────────
+// ── IFVG entry: first candle that closes back through the FVG after retracing into it
+// Bullish: price retraces into gap (close < fvg.top), first close back above fvg.top = entry
+// Bearish: price retraces into gap (close > fvg.bottom), first close back below fvg.bottom = entry
+export function findIFVGEntry(candles, fvg, bias) {
+  let retraced = false
+  for (const c of candles) {
+    if (c.time <= fvg.time) continue
+    if (bias === 'bullish') {
+      if (!retraced && c.close < fvg.top)    retraced = true
+      if (retraced  && c.close > fvg.top)    return c
+    } else {
+      if (!retraced && c.close > fvg.bottom) retraced = true
+      if (retraced  && c.close < fvg.bottom) return c
+    }
+  }
+  return null
+}
+
+// kept for backtest compatibility
 export function applyIFVG(candles, fvgs) {
   return fvgs.map(fvg => {
     const subsequent = candles.filter(c => c.time > fvg.time)
@@ -290,12 +308,11 @@ export function getLiveSignal(candles1h, candles5m, candles1m, symbol) {
   if (!fvgs5m.length) return null
   const lastFVG5m = fvgs5m[fvgs5m.length - 1]
 
-  // Step 5: IFVG on 1M
-  const m1After = candles1m.filter(c => c.time > lastFVG5m.time)
-  if (m1After.length < 5) return null
-  const raw1m = detectFVGs(m1After)
-  const ifvgs = applyIFVG(m1After, raw1m).filter(f => f.inversed && f.effectiveType === bias)
-  if (!ifvgs.length) return null
+  // Step 5: IFVG entry on 1M — first candle that closes back through the FVG
+  const m1After      = candles1m.filter(c => c.time > lastFVG5m.time)
+  if (m1After.length < 3) return null
+  const entryCandle  = findIFVGEntry(m1After, lastFVG5m, bias)
+  if (!entryCandle) return null
 
   // Step 6: RR check
   const currentPrice = candles1m[candles1m.length - 1].close

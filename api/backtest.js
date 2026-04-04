@@ -1,12 +1,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Backtest Engine: Daily H/L Liquidity Sweep + BOS + FVG + 1M IFVG Entry
+// Backtest Engine: Daily H/L Liquidity Sweep + BOS + 5M FVG + 1M IFVG Entry
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SYMBOL_MAP = {
   'MES1!': 'MES=F',
   'MNQ1!': 'MNQ=F',
   'MGC1!': 'MGC=F',
-  'Sl1!': 'SIL=F',
+  'Sl1!':  'SIL=F',
 }
 
 const CONTRACT_MULTIPLIER = { 'MES1!': 5, 'MNQ1!': 2, 'MGC1!': 10, 'Sl1!': 5 }
@@ -22,6 +22,17 @@ async function fetchTF(ticker, interval, range) {
   } catch { return [] }
 }
 
+// Fetch 1 week of 1m data (single call — Yahoo Finance max is 7 days for 1m)
+async function fetch1mRecent(ticker) {
+  const now     = Math.floor(Date.now() / 1000)
+  const period1 = now - 7 * 24 * 60 * 60
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&period1=${period1}&period2=${now}&includePrePost=false`
+  try {
+    const res  = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
+    const data = await res.json()
+    return parseCandles(data)
+  } catch { return [] }
+}
 
 function parseCandles(data) {
   const result = data?.chart?.result?.[0]
@@ -42,7 +53,6 @@ function parseCandles(data) {
   return candles
 }
 
-
 // ── Strategy primitives ───────────────────────────────────────────────────────
 function getETDateStr(ts) {
   return new Intl.DateTimeFormat('en-US', {
@@ -62,8 +72,8 @@ function getPrevDayHL(candles1h, currentTs) {
   const days = Object.keys(byDay).sort()
   const todayIdx = days.indexOf(today)
   if (todayIdx <= 0) return null
-  const prevDay = days[todayIdx - 1]
-  const candles = byDay[prevDay]
+  const prevDay  = days[todayIdx - 1]
+  const candles  = byDay[prevDay]
   return {
     high: Math.max(...candles.map(c => c.high)),
     low:  Math.min(...candles.map(c => c.low)),
@@ -74,7 +84,7 @@ function getPrevDayHL(candles1h, currentTs) {
 function detectSwings(candles, lookback = 3) {
   const highs = [], lows = []
   for (let i = lookback; i < candles.length - lookback; i++) {
-    const c = candles[i]
+    const c    = candles[i]
     const prev = candles.slice(i - lookback, i)
     const next = candles.slice(i + 1, i + lookback + 1)
     if (prev.every(x => x.high <= c.high) && next.every(x => x.high <= c.high))
@@ -97,18 +107,6 @@ function detectFVGs(candles) {
   return fvgs
 }
 
-function applyIFVG(candles, fvgs) {
-  return fvgs.map(fvg => {
-    let inversed = false
-    for (const c of candles) {
-      if (c.time <= fvg.time) continue
-      if (fvg.type === 'bullish' && c.low  <= fvg.mid) { inversed = true; break }
-      if (fvg.type === 'bearish' && c.high >= fvg.mid) { inversed = true; break }
-    }
-    return { ...fvg, inversed, effectiveType: inversed ? (fvg.type === 'bullish' ? 'bearish' : 'bullish') : fvg.type }
-  })
-}
-
 function detectBOS(candles, highs, lows) {
   const bos = []
   let lastHigh = null, lastLow = null, hPtr = 0, lPtr = 0
@@ -124,6 +122,24 @@ function detectBOS(candles, highs, lows) {
   return bos
 }
 
+// ── IFVG entry: first candle that closes back through the FVG after retracing into it
+// Bullish: price retraces INTO the gap (close < fvg.top), then closes back ABOVE fvg.top → entry
+// Bearish: price retraces INTO the gap (close > fvg.bottom), then closes back BELOW fvg.bottom → entry
+function findIFVGEntry(candles, fvg, bias) {
+  let retraced = false
+  for (const c of candles) {
+    if (c.time <= fvg.time) continue
+    if (bias === 'bullish') {
+      if (!retraced && c.close < fvg.top) retraced = true
+      if (retraced && c.close > fvg.top) return c   // first close above = entry
+    } else {
+      if (!retraced && c.close > fvg.bottom) retraced = true
+      if (retraced && c.close < fvg.bottom) return c // first close below = entry
+    }
+  }
+  return null
+}
+
 function bsFloor(candles, t) {
   let lo = 0, hi = candles.length - 1, idx = -1
   while (lo <= hi) {
@@ -134,10 +150,11 @@ function bsFloor(candles, t) {
   return idx
 }
 
-// ── Main backtest engine (runs entirely on 5M — no 1M fetch needed) ───────────
-function runBacktest(candles1h, candles5m, symbol) {
+// ── Main backtest: 5M sweep+BOS+FVG, 1M IFVG entry (falls back to 5M if no 1M data) ──
+function runBacktest(candles1h, candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
   const trades     = []
+  const has1m      = candles1m.length > 0
 
   if (!candles1h.length || !candles5m.length) return trades
 
@@ -146,14 +163,13 @@ function runBacktest(candles1h, candles5m, symbol) {
   for (let i = 10; i < candles5m.length - 1; i++) {
     const now5m = candles5m[i]
 
-    // Cooldown between trades
     if (now5m.time - lastTradeTime < 3600) continue
 
     // Step 1: Previous day H/L
     const pdhl = getPrevDayHL(candles1h, now5m.time)
     if (!pdhl) continue
 
-    // Step 2: Liquidity sweep on recent 5M candles
+    // Step 2: Liquidity sweep on recent 5M
     let bias = null, sweepPrice = null, sweepCandleIdx = null
     const lookback5m = candles5m.slice(Math.max(0, i - 20), i + 1)
     for (let j = lookback5m.length - 1; j >= 0; j--) {
@@ -179,17 +195,21 @@ function runBacktest(candles1h, candles5m, symbol) {
     if (afterBos5m.length < 3) continue
     const fvgs5m = detectFVGs(afterBos5m).filter(f => f.type === bias)
     if (!fvgs5m.length) continue
-    const lastFVG5m = fvgs5m[fvgs5m.length - 1]
+    const fvg5m = fvgs5m[fvgs5m.length - 1]
 
-    // Step 5: IFVG on 5M (after the FVG)
-    const postFVG5m = candles5m.slice(sweepCandleIdx, i + 1).filter(c => c.time >= lastFVG5m.time)
-    if (postFVG5m.length < 3) continue
-    const ifvgs = applyIFVG(postFVG5m, detectFVGs(postFVG5m)).filter(f => f.inversed && f.effectiveType === bias)
-    if (!ifvgs.length) continue
-
-    const latestIFVG  = ifvgs[ifvgs.length - 1]
-    const entryCandle = postFVG5m.find(c => c.time > latestIFVG.time)
+    // Step 5: IFVG entry — use 1M if available, else 5M
+    let entryCandle = null
+    if (has1m) {
+      const m1After = candles1m.filter(c => c.time > fvg5m.time && c.time <= now5m.time + 300)
+      entryCandle = findIFVGEntry(m1After, fvg5m, bias)
+    }
+    if (!entryCandle) {
+      // Fall back to 5M IFVG
+      const after5m = candles5m.filter(c => c.time > fvg5m.time && c.time <= now5m.time + 300)
+      entryCandle = findIFVGEntry(after5m, fvg5m, bias)
+    }
     if (!entryCandle) continue
+
     const entryPrice = entryCandle.close
 
     // Step 6: SL and TP
@@ -204,9 +224,9 @@ function runBacktest(candles1h, candles5m, symbol) {
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (slDist === 0 || tpDist / slDist < MIN_RR) continue
 
-    // Step 7: Simulate outcome on 5M
-    const entryIdx  = candles5m.indexOf(entryCandle)
-    const future5m  = candles5m.slice(entryIdx + 1, entryIdx + 200)
+    // Step 7: Simulate on 5M
+    const entryIdx = bsFloor(candles5m, entryCandle.time)
+    const future5m = candles5m.slice(entryIdx + 1, entryIdx + 200)
     let outcome = null, exitPrice = null, exitTime = null
 
     for (const fc of future5m) {
@@ -237,7 +257,7 @@ function runBacktest(candles1h, candles5m, symbol) {
       outcome,
       pnlDollars,
       rr,
-      signal:      'DailyHL-Sweep+BOS+FVG+IFVG',
+      signal:      'DailyHL-Sweep+BOS+5mFVG+1mIFVG',
     })
 
     lastTradeTime = now5m.time
@@ -256,12 +276,14 @@ export default async function handler(req, res) {
   if (!ticker) return res.status(400).json({ error: 'Unknown symbol' })
 
   try {
-    const [candles1h, candles5m] = await Promise.all([
-      fetchTF(ticker, '1h', '1y'),
+    // 3 calls total: 1h (6mo) + 5m (60d) + 1m (1 week)
+    const [candles1h, candles5m, candles1m] = await Promise.all([
+      fetchTF(ticker, '1h', '6mo'),
       fetchTF(ticker, '5m', '60d'),
+      fetch1mRecent(ticker),
     ])
 
-    const trades   = runBacktest(candles1h, candles5m, symbol)
+    const trades   = runBacktest(candles1h, candles5m, candles1m, symbol)
     const wins     = trades.filter(t => t.outcome === 'win').length
     const losses   = trades.filter(t => t.outcome === 'loss').length
     const winRate  = trades.length ? ((wins / trades.length) * 100).toFixed(1) : '0.0'
@@ -269,11 +291,13 @@ export default async function handler(req, res) {
 
     const earliest = candles5m.length ? new Date(candles5m[0].time * 1000).toISOString().split('T')[0] : null
     const latest   = candles5m.length ? new Date(candles5m[candles5m.length - 1].time * 1000).toISOString().split('T')[0] : null
-    const dataNote = `5m data: ${earliest} → ${latest} | Daily H/L Sweep + BOS + FVG + IFVG`
+    const dataNote = `5m: ${earliest} → ${latest} | 1m IFVG entry (last 7d) | Daily H/L Sweep`
 
     res.setHeader('Cache-Control', 's-maxage=3600')
-    return res.status(200).json({ symbol, trades, wins, losses, winRate, totalPnl, dataNote,
-      candles1h, candles5m })
+    return res.status(200).json({
+      symbol, trades, wins, losses, winRate, totalPnl, dataNote,
+      candles1h, candles5m, candles1m,
+    })
   } catch (err) {
     return res.status(500).json({ error: err.message })
   }
