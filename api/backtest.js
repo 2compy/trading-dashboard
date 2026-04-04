@@ -41,9 +41,9 @@ export default async function handler(req, res) {
 
   try {
     const [candles1h, candles5m, candles1m] = await Promise.all([
-      fetchTF(ticker, '1h',  '6mo'),
-      fetchTF(ticker, '5m',  '60d'),
-      fetchTF(ticker, '1m',  '7d'),
+      fetchTF(ticker, '1h',  '2y'),   // 2 years of hourly data
+      fetchTF(ticker, '5m',  '60d'),  // Yahoo Finance max for 5m
+      fetchTF(ticker, '1m',  '7d'),   // Yahoo Finance max for 1m
     ])
 
     res.setHeader('Cache-Control', 's-maxage=60')

@@ -27,16 +27,15 @@ export default function Backtest({ onBack }) {
       const data = await res.json()
       if (data.error) throw new Error(data.error)
 
-      const trades = runBacktest(data.candles1h, data.candles5m, data.candles1m)
-      const wins   = trades.filter(t => t.outcome === 'win').length
-      const losses = trades.filter(t => t.outcome === 'loss').length
-      const winRate = trades.length ? ((wins / trades.length) * 100).toFixed(1) : '0.0'
-      const avgRR  = trades.length
-        ? (trades.reduce((s, t) => s + t.rr, 0) / trades.length).toFixed(2)
-        : '0.00'
-      const totalPnl = trades.reduce((s, t) => s + t.pnlPct, 0).toFixed(2)
+      const trades    = runBacktest(data.candles1h, data.candles5m, data.candles1m, symbol)
+      const wins      = trades.filter(t => t.outcome === 'win').length
+      const losses    = trades.filter(t => t.outcome === 'loss').length
+      const winRate   = trades.length ? ((wins / trades.length) * 100).toFixed(1) : '0.0'
+      const totalPnl  = trades.reduce((s, t) => s + t.pnlDollars, 0)
+      const grossWin  = trades.filter(t => t.outcome === 'win').length * 300
+      const grossLoss = trades.filter(t => t.outcome === 'loss').length * 200
 
-      setResults({ trades, wins, losses, winRate, avgRR, totalPnl })
+      setResults({ trades, wins, losses, winRate, totalPnl, grossWin, grossLoss })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -86,7 +85,7 @@ export default function Backtest({ onBack }) {
 
         <div style={{ marginLeft: 'auto' }}>
           <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>
-            Data: 1H (6mo) · 5M (60d) · 1M (7d)
+            Data: 1H (2y) · 5M (60d) · 1M (7d) · SL $200 · TP $300 · 1 unit
           </div>
           <button
             onClick={runTest}
@@ -121,12 +120,13 @@ export default function Backtest({ onBack }) {
           {/* Summary stats */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
             {[
-              { label: 'Win Rate',     value: `${results.winRate}%`,    color: parseFloat(results.winRate) >= 50 ? '#4ade80' : '#f87171', big: true },
-              { label: 'Total Trades', value: results.trades.length,    color: '#f9fafb' },
-              { label: 'Wins',         value: results.wins,             color: '#4ade80' },
-              { label: 'Losses',       value: results.losses,           color: '#f87171' },
-              { label: 'Avg R:R',      value: `${results.avgRR}`,       color: '#60a5fa' },
-              { label: 'Total P&L %',  value: `${results.totalPnl > 0 ? '+' : ''}${results.totalPnl}%`, color: parseFloat(results.totalPnl) >= 0 ? '#4ade80' : '#f87171' },
+              { label: 'Win Rate',      value: `${results.winRate}%`,   color: parseFloat(results.winRate) >= 50 ? '#4ade80' : '#f87171', big: true },
+              { label: 'Total Trades', value: results.trades.length,   color: '#f9fafb' },
+              { label: 'Wins',         value: results.wins,            color: '#4ade80' },
+              { label: 'Losses',       value: results.losses,          color: '#f87171' },
+              { label: 'Gross Profit', value: `$${results.grossWin.toLocaleString()}`,  color: '#4ade80' },
+              { label: 'Gross Loss',   value: `-$${results.grossLoss.toLocaleString()}`, color: '#f87171' },
+              { label: 'Net P&L',      value: `${results.totalPnl >= 0 ? '+' : ''}$${results.totalPnl.toLocaleString()}`, color: results.totalPnl >= 0 ? '#4ade80' : '#f87171', big: true },
             ].map(s => (
               <div key={s.label} className="card" style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{s.label}</div>
@@ -144,7 +144,7 @@ export default function Backtest({ onBack }) {
               <table>
                 <thead>
                   <tr>
-                    {['#', 'Time', 'Bias', 'Signal', 'Entry', 'Stop', 'Target', 'Exit', 'R:R', 'P&L %', 'Result'].map(h => (
+                    {['#', 'Time', 'Bias', 'Signal', 'Entry', 'Stop', 'Target', 'Exit', 'R:R', 'P&L $', 'Result'].map(h => (
                       <th key={h}>{h}</th>
                     ))}
                   </tr>
@@ -173,8 +173,8 @@ export default function Backtest({ onBack }) {
                       <td style={{ fontFamily: 'monospace', color: '#4ade80' }}>{t.targetPrice}</td>
                       <td style={{ fontFamily: 'monospace' }}>{t.exitPrice}</td>
                       <td style={{ fontFamily: 'monospace', color: '#60a5fa' }}>{t.rr}</td>
-                      <td style={{ fontFamily: 'monospace', fontWeight: 700, color: t.pnlPct >= 0 ? '#4ade80' : '#f87171' }}>
-                        {t.pnlPct >= 0 ? '+' : ''}{t.pnlPct}%
+                      <td style={{ fontFamily: 'monospace', fontWeight: 700, color: t.pnlDollars >= 0 ? '#4ade80' : '#f87171' }}>
+                        {t.pnlDollars >= 0 ? '+' : ''}${t.pnlDollars}
                       </td>
                       <td>
                         <span style={{

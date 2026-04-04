@@ -158,8 +158,21 @@ export function detectSweeps(candles, swingHighs, swingLows) {
 // ─── Full Backtest ─────────────────────────────────────────────────────────────
 // Runs the multi-TF strategy against historical candle data.
 // candles1h / candles5m / candles1m should be sorted ascending by time.
-export function runBacktest(candles1h, candles5m, candles1m, opts = {}) {
-  const { riskPct = 1, rewardRatio = 3 } = opts
+// Dollar value per point for each symbol (1 unit / 1 contract)
+export const CONTRACT_MULTIPLIER = {
+  'MES1!': 5,    // $5 per point
+  'MNQ1!': 2,    // $2 per point
+  'MGC1!': 10,   // $10 per point
+  'MSL1!': 5,    // $5 per point (micro silver approx)
+}
+
+const SL_DOLLARS = 200   // stop loss in dollars
+const TP_DOLLARS = 300   // take profit in dollars
+
+export function runBacktest(candles1h, candles5m, candles1m, symbol = 'MES1!') {
+  const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
+  const stopPoints   = SL_DOLLARS / multiplier   // points needed to lose $200
+  const targetPoints = TP_DOLLARS / multiplier   // points needed to gain $300
   const trades = []
 
   if (!candles1h.length || !candles5m.length || !candles1m.length) return trades
@@ -205,24 +218,13 @@ export function runBacktest(candles1h, candles5m, candles1m, opts = {}) {
     const entryPrice = m1Slice.find(c => c.time >= confirmation.time)?.close
     if (!entryPrice) continue
 
-    // 5. Stop loss: exactly 25 points below entry (long) or above entry (short)
-    const stopDist  = 25
-    const stopPrice = bias === 'bullish' ? entryPrice - stopDist : entryPrice + stopDist
+    // 5. Stop loss: $200 fixed (converted to points for this symbol)
+    const stopPrice   = bias === 'bullish' ? entryPrice - stopPoints : entryPrice + stopPoints
 
-    // 6. Target: nearest resting liquidity (swing high for longs, swing low for shorts)
+    // 6. Target: $300 fixed (converted to points for this symbol)
+    const targetPrice = bias === 'bullish' ? entryPrice + targetPoints : entryPrice - targetPoints
+
     const futureCandles5m = candles5m.slice(i + 1, i + 50)
-    const { highs: futHighs, lows: futLows } = detectSwings(
-      candles5m.slice(Math.max(0, i - 20), i + 1), 2
-    )
-
-    let targetPrice
-    if (bias === 'bullish') {
-      const above = futHighs.filter(h => h.price > entryPrice)
-      targetPrice = above.length ? above[0].price : entryPrice + stopDist * rewardRatio
-    } else {
-      const below = futLows.filter(l => l.price < entryPrice)
-      targetPrice = below.length ? below[0].price : entryPrice - stopDist * rewardRatio
-    }
 
     // 7. Simulate the trade outcome on future 5m candles
     let outcome = null
@@ -241,11 +243,8 @@ export function runBacktest(candles1h, candles5m, candles1m, opts = {}) {
 
     if (!outcome) continue // trade never resolved in window
 
-    const pnlPct = bias === 'bullish'
-      ? ((exitPrice - entryPrice) / entryPrice) * 100
-      : ((entryPrice - exitPrice) / entryPrice) * 100
+    const pnlDollars = outcome === 'win' ? TP_DOLLARS : -SL_DOLLARS
 
-    const hasIFVG = ifvgSignals.length > 0
     trades.push({
       id:          trades.length + 1,
       time:        confirmation.time,
@@ -256,8 +255,8 @@ export function runBacktest(candles1h, candles5m, candles1m, opts = {}) {
       exitPrice:   parseFloat(exitPrice.toFixed(4)),
       exitTime,
       outcome,
-      pnlPct:      parseFloat(pnlPct.toFixed(2)),
-      rr:          parseFloat((Math.abs(targetPrice - entryPrice) / stopDist).toFixed(2)),
+      pnlDollars,
+      rr:          (TP_DOLLARS / SL_DOLLARS).toFixed(2),
       signal:      'IFVG+BOS',
     })
 
