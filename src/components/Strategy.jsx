@@ -46,7 +46,8 @@ const STRATEGIES = {
       { label: 'Step 2', value: '1H BOS must agree with 4H direction' },
       { label: 'Step 3', value: 'TP = nearest 1H swing H/L beyond current price' },
       { label: 'Step 4', value: 'No open FVG on 4H or 1H blocking path to TP' },
-      { label: 'Step 5', value: '5M FVG matching bias (bullish \u22655pt, bearish \u22657pt), enter on first midpoint touch only' },
+      { label: 'Step 5', value: '5M FVG matching bias, enter on first midpoint touch only (skip if touched >1 time)' },
+      { label: '1M FVG Min', value: 'Bullish \u22655pt, Bearish \u22657pt' },
     ],
     risk: [
       { label: 'Stop Loss', value: 'Fixed 20 points ($200 risk per contract)' },
