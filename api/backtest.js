@@ -404,12 +404,18 @@ function runBacktestMGC(candles5m) {
 //   Bearish FVG inversed (close > top)    → bullish IFVG → LONG on retrace
 function detectIFVGs(candles, fvgs) {
   const ifvgs = []
+  // Build a time→index map for fast lookup
+  const timeIdx = {}
+  for (let i = 0; i < candles.length; i++) timeIdx[candles[i].time] = i
+
   for (const fvg of fvgs) {
     if (fvg.top - fvg.bottom < 7) continue  // min 7pt wide
 
-    for (let k = 0; k < candles.length; k++) {
+    // Start scanning from the FVG's position, cap at 200 candles ahead
+    const startIdx = (timeIdx[fvg.time] || 0) + 1
+    const endIdx = Math.min(startIdx + 200, candles.length)
+    for (let k = startIdx; k < endIdx; k++) {
       const c = candles[k]
-      if (c.time <= fvg.time) continue
       if (fvg.type === 'bullish' && c.close < fvg.bottom) {
         ifvgs.push({ ...fvg, ifvgBias: 'bearish', inversionTime: c.time, inversionIndex: k })
         break
@@ -426,8 +432,10 @@ function detectIFVGs(candles, fvgs) {
 // ── Find midpoint retrace entry after IFVG inversion ────────────────────────
 function findMidRetrace(candles, ifvg) {
   let movedAway = false
-  for (const c of candles) {
-    if (c.time <= ifvg.inversionTime) continue
+  const startIdx = ifvg.inversionIndex + 1
+  const endIdx = Math.min(startIdx + 200, candles.length)
+  for (let k = startIdx; k < endIdx; k++) {
+    const c = candles[k]
     if (ifvg.ifvgBias === 'bullish') {
       if (!movedAway && c.close > ifvg.mid) movedAway = true
       if (movedAway && c.low <= ifvg.mid) return c
