@@ -231,6 +231,8 @@ function findIFVGEntry(candles, fvg, bias) {
 }
 
 // ── SL/TP for default strategy ────────────────────────────────────────────────
+// Dynamic TP window: scales with SL distance so R:R ≥ 2 is always achievable.
+// Matches frontend strategy.js logic.
 function getTPSL(bias, entryPrice, sweepWickExtreme, recent5m) {
   let slPrice = bias === 'bullish' ? sweepWickExtreme - 2 : sweepWickExtreme + 2
   if (bias === 'bullish' && entryPrice - slPrice < 15) slPrice = entryPrice - 15
@@ -238,14 +240,18 @@ function getTPSL(bias, entryPrice, sweepWickExtreme, recent5m) {
   const slDist = Math.abs(entryPrice - slPrice)
   if (slDist > 60) return null
 
+  // Dynamic TP: minimum = SL * RR, search window extends 30pt beyond that
+  const minTPDist = slDist * MIN_RR
+  const maxTPDist = minTPDist + 30
+
   const { highs, lows } = detectSwings(recent5m, 3)
   let tpPrice
   if (bias === 'bullish') {
-    const c = highs.filter(h => h.price > entryPrice + 50 && h.price <= entryPrice + 70).sort((a, b) => a.price - b.price)
-    tpPrice = c[0]?.price ?? entryPrice + 60
+    const c = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+    tpPrice = c[0]?.price ?? entryPrice + minTPDist
   } else {
-    const c = lows.filter(l => l.price < entryPrice - 50 && l.price >= entryPrice - 70).sort((a, b) => b.price - a.price)
-    tpPrice = c[0]?.price ?? entryPrice - 60
+    const c = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
+    tpPrice = c[0]?.price ?? entryPrice - minTPDist
   }
   return { slPrice, tpPrice }
 }
@@ -397,14 +403,10 @@ function runBacktest(candles5m, candles1m, symbol) {
   const usedSweeps   = new Set()   // prevent same sweep from generating multiple trades
   const usedEntryTimes = new Set() // prevent two trades at the exact same time
 
-  // Only iterate 5m candles that fall within the 1m data range
-  const m1Start = candles1m.length ? candles1m[0].time : 0
-
   for (let i = 20; i < candles5m.length - 1; i++) {
     const now5m    = candles5m[i]
     const recent5m = candles5m.slice(Math.max(0, i - 30), i + 1)
 
-    if (now5m.time < m1Start) continue
     if (!isKillZone(now5m.time)) continue
     if (now5m.time - lastTradeTime < 1200) continue
 
