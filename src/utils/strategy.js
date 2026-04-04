@@ -159,7 +159,7 @@ export function detectSweeps(candles, swingHighs, swingLows) {
 // Runs the multi-TF strategy against historical candle data.
 // candles1h / candles5m / candles1m should be sorted ascending by time.
 export function runBacktest(candles1h, candles5m, candles1m, opts = {}) {
-  const { riskPct = 1, rewardRatio = 2 } = opts
+  const { riskPct = 1, rewardRatio = 3 } = opts
   const trades = []
 
   if (!candles1h.length || !candles5m.length || !candles1m.length) return trades
