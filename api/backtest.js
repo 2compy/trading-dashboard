@@ -80,11 +80,11 @@ function getETMinutes(ts) {
   return h * 60 + m
 }
 
-// Kill zones: London (3-5am ET), NY open (8:30am-12pm ET), NY PM (1:30-3pm ET)
+// Kill zones: London (3-5am ET), NY open (9:30-11:30am ET), NY PM (1:30-3pm ET)
 function isKillZone(ts) {
   const mins = getETMinutes(ts)
   return (mins >= 180 && mins < 300) ||
-         (mins >= 510 && mins < 720) ||
+         (mins >= 570 && mins < 690) ||
          (mins >= 810 && mins < 900)
 }
 
@@ -174,20 +174,6 @@ function detectBOS(candles, highs, lows) {
   return bos
 }
 
-// ── Session H/L (current day's H/L from earlier candles) ─────────────────────
-function getSessionHL(candles5m, nowTs) {
-  const todayStr = getETDateStr(nowTs)
-  const todayCandles = candles5m.filter(c => getETDateStr(c.time) === todayStr)
-  if (todayCandles.length <= 5) return null
-  const sessionCandles = todayCandles.slice(0, -3)
-  let high = -Infinity, low = Infinity
-  for (const c of sessionCandles) {
-    if (c.high > high) high = c.high
-    if (c.low  < low)  low  = c.low
-  }
-  return { high, low }
-}
-
 // Returns true if any open FVG on these candles overlaps the path from price → target
 function hasFVGBlocking(candles, fromPrice, toPrice) {
   const lo = Math.min(fromPrice, toPrice)
@@ -218,18 +204,14 @@ function getTPSL(bias, entryPrice, sweepWickExtreme, recent5m) {
   const slDist = Math.abs(entryPrice - slPrice)
   if (slDist > 60) return null
 
-  // Dynamic TP: minimum distance = SL * MIN_RR to guarantee R:R
-  const minTPDist = slDist * MIN_RR
-  const maxTPDist = minTPDist + 30
-
   const { highs, lows } = detectSwings(recent5m, 3)
   let tpPrice
   if (bias === 'bullish') {
-    const c = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
-    tpPrice = c[0]?.price ?? entryPrice + minTPDist
+    const c = highs.filter(h => h.price > entryPrice + 50 && h.price <= entryPrice + 70).sort((a, b) => a.price - b.price)
+    tpPrice = c[0]?.price ?? entryPrice + 60
   } else {
-    const c = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
-    tpPrice = c[0]?.price ?? entryPrice - minTPDist
+    const c = lows.filter(l => l.price < entryPrice - 50 && l.price >= entryPrice - 70).sort((a, b) => b.price - a.price)
+    tpPrice = c[0]?.price ?? entryPrice - 60
   }
   return { slPrice, tpPrice }
 }
@@ -331,7 +313,7 @@ function runBacktestMGC(candles5m) {
 
     // ── Simulate on 5m ───────────────────────────────────────────────────────
     const entryIdx = candles5m.indexOf(entryCandle)
-    const future5m = candles5m.slice(entryIdx + 1, entryIdx + 600)
+    const future5m = candles5m.slice(entryIdx + 1, entryIdx + 300)
     let outcome = null, exitPrice = null, exitTime = null
 
     for (const fc of future5m) {
@@ -379,26 +361,8 @@ function runBacktest(candles5m, candles1m, symbol) {
   // Only iterate 5m candles that fall within the 1m data range
   const m1Start = candles1m.length ? candles1m[0].time : 0
 
-  // Incremental session H/L tracker (O(n) instead of O(n²))
-  let sessionDay = null, sessionHigh = -Infinity, sessionLow = Infinity
-
   for (let i = 20; i < candles5m.length - 1; i++) {
     const now5m    = candles5m[i]
-
-    // Update session H/L incrementally
-    const day = getETDateStr(now5m.time)
-    if (day !== sessionDay) {
-      sessionDay = day; sessionHigh = -Infinity; sessionLow = Infinity
-    }
-    // Use candle i-1 to avoid self-reference
-    if (i > 0) {
-      const prev = candles5m[i - 1]
-      if (prev && getETDateStr(prev.time) === sessionDay) {
-        sessionHigh = Math.max(sessionHigh, prev.high)
-        sessionLow  = Math.min(sessionLow,  prev.low)
-      }
-    }
-
     const recent5m = candles5m.slice(Math.max(0, i - 30), i + 1)
 
     if (now5m.time < m1Start) continue
@@ -406,38 +370,24 @@ function runBacktest(candles5m, candles1m, symbol) {
     if (now5m.time - lastTradeTime < 1200) continue
 
     const pdhl = getPrevDayHL(dailyHL, now5m.time)
+    if (!pdhl) continue
 
-    // Confluence 1: Daily H/L sweep OR session H/L sweep
+    // Confluence 1: Daily H/L sweep (required)
     let sweepBias = null, sweepWickExtreme = null, sweepTime = null
-
-    if (pdhl) {
-      for (let j = recent5m.length - 1; j >= 0; j--) {
-        const c = recent5m[j]
-        if (c.low < pdhl.low && c.close > pdhl.low) {
-          sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
-        }
-        if (c.high > pdhl.high && c.close < pdhl.high) {
-          sweepBias = 'bearish'; sweepWickExtreme = c.high; sweepTime = c.time; break
-        }
+    for (let j = recent5m.length - 1; j >= 0; j--) {
+      const c = recent5m[j]
+      if (c.low < pdhl.low && c.close > pdhl.low) {
+        sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
       }
-    }
-
-    if (!sweepBias && sessionHigh > -Infinity) {
-      for (let j = recent5m.length - 1; j >= 0; j--) {
-        const c = recent5m[j]
-        if (c.low < sessionLow && c.close > sessionLow) {
-          sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
-        }
-        if (c.high > sessionHigh && c.close < sessionHigh) {
-          sweepBias = 'bearish'; sweepWickExtreme = c.high; sweepTime = c.time; break
-        }
+      if (c.high > pdhl.high && c.close < pdhl.high) {
+        sweepBias = 'bearish'; sweepWickExtreme = c.high; sweepTime = c.time; break
       }
     }
     if (!sweepBias) continue
 
     // Confluence 2: BOS on 5m AFTER the sweep, same direction (required)
     const postSweep5m = recent5m.filter(c => c.time > sweepTime)
-    if (postSweep5m.length < 3) continue
+    if (postSweep5m.length < 4) continue
     const { highs: h5, lows: l5 } = detectSwings(postSweep5m, 2)
     const bosList = detectBOS(postSweep5m, h5, l5).filter(b => b.type === sweepBias)
     if (!bosList.length) continue
@@ -487,8 +437,8 @@ function runBacktest(candles5m, candles1m, symbol) {
     // Simulate on 1m if available, else 5m
     const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
     const simCandles = entryIdx1m >= 0 && entryIdx1m < candles1m.length - 1
-      ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 720)
-      : candles5m.slice(candles5m.findIndex(c => c.time >= entryCandle.time) + 1).slice(0, 300)
+      ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 300)
+      : candles5m.slice(candles5m.findIndex(c => c.time >= entryCandle.time) + 1).slice(0, 200)
     let outcome = null, exitPrice = null, exitTime = null
 
     for (const fc of simCandles) {
