@@ -512,14 +512,26 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
   // Merge and sort by entry time
   const all = [...sweepTrades, ...ifvgTrades].sort((a, b) => a.time - b.time)
 
-  // Dedup: no two trades within 20 min of each other
+  // Aggressive dedup:
+  //  1. Exact same entry timestamp = duplicate (drop the second)
+  //  2. Same bias within 20 min = same market move (drop the second)
+  //  3. Any trade within 10 min of another = too close (drop the second)
   const final = []
-  let lastTime = 0
+  const usedTimes = new Set()
   for (const t of all) {
-    if (t.time - lastTime < 1200) continue
+    if (usedTimes.has(t.time)) continue
+
+    let dominated = false
+    for (const prev of final) {
+      const gap = t.time - prev.time
+      if (gap < 600) { dominated = true; break }
+      if (gap < 1200 && t.bias === prev.bias) { dominated = true; break }
+    }
+    if (dominated) continue
+
     t.id = final.length + 1
     final.push(t)
-    lastTime = t.time
+    usedTimes.add(t.time)
   }
 
   return final

@@ -717,7 +717,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
   return trades
 }
 
-// ── Combined backtest: merge both strategies, dedup by time ─────────────────
+// ── Combined backtest: merge both strategies, dedup aggressively ─────────────
 function runBacktest(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
 
@@ -728,14 +728,30 @@ function runBacktest(candles5m, candles1m, symbol) {
   // Merge and sort by entry time
   const all = [...sweepTrades, ...ifvgTrades].sort((a, b) => a.time - b.time)
 
-  // Dedup: no two trades within 20 min of each other
+  // Aggressive dedup:
+  //  1. Exact same entry timestamp = duplicate (drop the second)
+  //  2. Same bias within 20 min = same market move (drop the second)
+  //  3. Any trade within 10 min of another = too close (drop the second)
   const final = []
-  let lastTime = 0
+  const usedTimes = new Set()
   for (const t of all) {
-    if (t.time - lastTime < 600) continue
+    // Exact time dedup
+    if (usedTimes.has(t.time)) continue
+
+    // Check against all accepted trades for proximity + same-bias overlap
+    let dominated = false
+    for (const prev of final) {
+      const gap = t.time - prev.time
+      // Within 10 min of any trade = too close
+      if (gap < 600) { dominated = true; break }
+      // Same bias within 20 min = same move, skip
+      if (gap < 1200 && t.bias === prev.bias) { dominated = true; break }
+    }
+    if (dominated) continue
+
     t.id = final.length + 1
     final.push(t)
-    lastTime = t.time
+    usedTimes.add(t.time)
   }
 
   return final
