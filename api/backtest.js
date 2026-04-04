@@ -80,12 +80,12 @@ function getETMinutes(ts) {
   return h * 60 + m
 }
 
-// Kill zones: London (3-5am ET), NY open (9:30-11:30am ET), NY PM (1:30-3pm ET)
+// Kill zones: London (3-5am ET), NY open (8:30am-12pm ET), NY PM (1:30-3pm ET)
 function isKillZone(ts) {
   const mins = getETMinutes(ts)
-  return (mins >= 180 && mins < 300) ||
-         (mins >= 570 && mins < 690) ||
-         (mins >= 810 && mins < 900)
+  return (mins >= 180 && mins < 300) ||   // London: 3:00–5:00 AM ET
+         (mins >= 510 && mins < 720) ||   // NY open: 8:30 AM–12:00 PM ET
+         (mins >= 810 && mins < 900)      // NY PM: 1:30–3:00 PM ET
 }
 
 // MGC kill zones: Asia open (8pm-midnight ET), NY open (8am-noon ET)
@@ -172,6 +172,20 @@ function detectBOS(candles, highs, lows) {
       bos.push({ type: 'bearish', price: lastLow.price,  time: curr.time })
   }
   return bos
+}
+
+// ── Session H/L (current day's H/L from earlier candles, excluding last 3) ───
+function getSessionHL(candles5m, nowTs) {
+  const todayStr = getETDateStr(nowTs)
+  const todayCandles = candles5m.filter(c => getETDateStr(c.time) === todayStr)
+  if (todayCandles.length <= 5) return null
+  const sessionCandles = todayCandles.slice(0, -3)
+  let high = -Infinity, low = Infinity
+  for (const c of sessionCandles) {
+    if (c.high > high) high = c.high
+    if (c.low  < low)  low  = c.low
+  }
+  return { high, low }
 }
 
 // Returns true if any open FVG on these candles overlaps the path from price → target
@@ -349,6 +363,8 @@ function runBacktestMGC(candles5m) {
 }
 
 // ── Default strategy (MES1!, MNQ1!, Sl1!) ────────────────────────────────────
+// Matches frontend strategy.js: session H/L sweeps, 3pt FVG min, 5M fallback,
+// sweep deduplication, wider kill zones, min 3 post-sweep candles.
 function runBacktest(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
   const trades     = []
@@ -357,6 +373,8 @@ function runBacktest(candles5m, candles1m, symbol) {
 
   const dailyHL = buildDailyHL(candles5m)
   let lastTradeTime = 0
+  const usedSweeps  = new Set()   // prevent same sweep from generating multiple trades
+  const usedEntryTimes = new Set() // prevent two trades at the exact same time
 
   // Only iterate 5m candles that fall within the 1m data range
   const m1Start = candles1m.length ? candles1m[0].time : 0
@@ -370,24 +388,46 @@ function runBacktest(candles5m, candles1m, symbol) {
     if (now5m.time - lastTradeTime < 1200) continue
 
     const pdhl = getPrevDayHL(dailyHL, now5m.time)
-    if (!pdhl) continue
 
-    // Confluence 1: Daily H/L sweep (required)
+    // Confluence 1: Daily H/L sweep OR session H/L sweep
     let sweepBias = null, sweepWickExtreme = null, sweepTime = null
-    for (let j = recent5m.length - 1; j >= 0; j--) {
-      const c = recent5m[j]
-      if (c.low < pdhl.low && c.close > pdhl.low) {
-        sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
+
+    // Try prev day H/L sweep first
+    if (pdhl) {
+      for (let j = recent5m.length - 1; j >= 0; j--) {
+        const c = recent5m[j]
+        if (c.low < pdhl.low && c.close > pdhl.low) {
+          sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
+        }
+        if (c.high > pdhl.high && c.close < pdhl.high) {
+          sweepBias = 'bearish'; sweepWickExtreme = c.high; sweepTime = c.time; break
+        }
       }
-      if (c.high > pdhl.high && c.close < pdhl.high) {
-        sweepBias = 'bearish'; sweepWickExtreme = c.high; sweepTime = c.time; break
+    }
+
+    // Fallback: session H/L sweep (current day)
+    if (!sweepBias) {
+      const sessionHL = getSessionHL(candles5m, now5m.time)
+      if (sessionHL) {
+        for (let j = recent5m.length - 1; j >= 0; j--) {
+          const c = recent5m[j]
+          if (c.low < sessionHL.low && c.close > sessionHL.low) {
+            sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
+          }
+          if (c.high > sessionHL.high && c.close < sessionHL.high) {
+            sweepBias = 'bearish'; sweepWickExtreme = c.high; sweepTime = c.time; break
+          }
+        }
       }
     }
     if (!sweepBias) continue
 
-    // Confluence 2: BOS on 5m AFTER the sweep, same direction (required)
+    // Deduplicate: skip if we already traded this exact sweep
+    if (usedSweeps.has(sweepTime)) continue
+
+    // Confluence 2: BOS on 5m AFTER the sweep, same direction (min 3 candles)
     const postSweep5m = recent5m.filter(c => c.time > sweepTime)
-    if (postSweep5m.length < 4) continue
+    if (postSweep5m.length < 3) continue
     const { highs: h5, lows: l5 } = detectSwings(postSweep5m, 2)
     const bosList = detectBOS(postSweep5m, h5, l5).filter(b => b.type === sweepBias)
     if (!bosList.length) continue
@@ -421,6 +461,9 @@ function runBacktest(candles5m, candles1m, symbol) {
       entryPrice = entryCandle.open
     }
 
+    // Prevent two trades at the exact same entry time
+    if (usedEntryTimes.has(entryCandle.time)) continue
+
     // SL/TP
     const tpsl = getTPSL(bias, entryPrice, sweepWickExtreme, recent5m)
     if (!tpsl) continue
@@ -437,7 +480,7 @@ function runBacktest(candles5m, candles1m, symbol) {
     // Simulate on 1m if available, else 5m
     const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
     const simCandles = entryIdx1m >= 0 && entryIdx1m < candles1m.length - 1
-      ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 300)
+      ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 720)
       : candles5m.slice(candles5m.findIndex(c => c.time >= entryCandle.time) + 1).slice(0, 200)
     let outcome = null, exitPrice = null, exitTime = null
 
@@ -467,6 +510,9 @@ function runBacktest(candles5m, candles1m, symbol) {
       signal: entrySignal,
     })
 
+    // Mark this sweep and entry time as used
+    usedSweeps.add(sweepTime)
+    usedEntryTimes.add(entryCandle.time)
     lastTradeTime = now5m.time
   }
 

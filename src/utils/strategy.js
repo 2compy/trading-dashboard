@@ -192,6 +192,8 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
 
   const dailyHL = buildDailyHL(candles5m)
   let lastTradeTime = 0
+  const usedSweeps     = new Set()   // prevent same sweep from generating multiple trades
+  const usedEntryTimes = new Set()   // prevent two trades at the exact same time
 
   for (let i = 20; i < candles5m.length - 1; i++) {
     const now5m    = candles5m[i]
@@ -233,6 +235,9 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
     }
     if (!sweepBias) continue
 
+    // Deduplicate: skip if we already traded this exact sweep
+    if (usedSweeps.has(sweepTime)) continue
+
     // Confluence 2: BOS on 5M AFTER the sweep, same direction
     const postSweep5m = recent5m.filter(c => c.time > sweepTime)
     if (postSweep5m.length < 3) continue
@@ -268,6 +273,9 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
       if (!entryCandle) continue
       entryPrice = entryCandle.open
     }
+
+    // Prevent two trades at the exact same entry time
+    if (usedEntryTimes.has(entryCandle.time)) continue
 
     // SL/TP
     let slPrice = bias === 'bullish' ? sweepWickExtreme - 2 : sweepWickExtreme + 2
@@ -328,6 +336,9 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
       signal:      entrySignal,
     })
 
+    // Mark this sweep and entry time as used
+    usedSweeps.add(sweepTime)
+    usedEntryTimes.add(entryCandle.time)
     lastTradeTime = now5m.time
   }
 
@@ -393,18 +404,19 @@ export function getSignalDebugInfo(candles5m, candles1m) {
       const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, sweepBias)
       if (entryCandle) {
         const sig = sweepBias === 'bullish' ? 'LONG' : 'SHORT'
-        return { signal: sig, step: 'signal', label: `\ud83d\udfe2 ${sig} signal active (1m IFVG entry)` }
+        return { signal: sig, step: 'signal', label: `🟢 ${sig} signal active (1m IFVG entry)` }
       }
-      return { signal: null, step: 'ifvg', label: `${sweepBias} FVG at ${fvg1m.bottom.toFixed(2)}\u2013${fvg1m.top.toFixed(2)} \u2014 awaiting IFVG retrace entry` }
+
+      return { signal: null, step: 'ifvg', label: `${sweepBias} FVG at ${fvg1m.bottom.toFixed(2)}–${fvg1m.top.toFixed(2)} — awaiting IFVG retrace entry` }
     }
   }
 
-  // 5M BOS fallback signal
+  // 5M fallback: BOS confirmed, no 1m IFVG needed
   const sig = sweepBias === 'bullish' ? 'LONG' : 'SHORT'
-  return { signal: sig, step: 'signal', label: `\ud83d\udfe2 ${sig} signal active (5m BOS fallback)` }
+  return { signal: sig, step: 'signal', label: `🟢 ${sig} signal active (5m BOS fallback)` }
 }
 
-// ── Live signal — returns { direction, bosTime, signal } or null ─────────────
+// ── Live signal (returns 'LONG', 'SHORT', or null) ──────────────────────────
 export function getLiveSignal(candles5m, candles1m) {
   if (!candles5m?.length) return null
 
@@ -412,41 +424,35 @@ export function getLiveSignal(candles5m, candles1m) {
   const nowTs    = recent5m[recent5m.length - 1]?.time
   if (!nowTs) return null
 
+  // Kill zone check
   if (!isKillZone(nowTs)) return null
 
-  // Confluence 1: Liquidity sweep (prev day H/L or session H/L)
+  // Sweep detection (prev day H/L + session H/L fallback)
   const { sweepBias, sweepTime } = findSweep(recent5m, candles5m, nowTs)
   if (!sweepBias) return null
 
-  // Confluence 2: BOS on 5M after sweep
+  // BOS on 5M AFTER the sweep, same direction (min 3 candles)
   const postSweep5m = recent5m.filter(c => c.time > sweepTime)
   if (postSweep5m.length < 3) return null
   const { highs: h5, lows: l5 } = detectSwings(postSweep5m, 2)
-  const bosList   = detectBOS(postSweep5m, h5, l5).filter(b => b.type === sweepBias)
+  const bosList = detectBOS(postSweep5m, h5, l5).filter(b => b.type === sweepBias)
   if (!bosList.length) return null
   const latestBOS = bosList[bosList.length - 1]
 
-  const bias = sweepBias
-
-  // Entry: try 1M FVG + IFVG first
-  let entrySignal = null
-
+  // Try 1m IFVG entry first
   if (candles1m?.length) {
     const m1After = candles1m.filter(c => c.time >= latestBOS.time)
     if (m1After.length >= 5) {
-      const fvgs1m = detectFVGs(m1After).filter(f => f.type === bias && f.top - f.bottom >= 3)
+      const fvgs1m = detectFVGs(m1After).filter(f => f.type === sweepBias && f.top - f.bottom >= 3)
       if (fvgs1m.length) {
         const fvg1m     = fvgs1m[fvgs1m.length - 1]
         const m1PostFVG = m1After.filter(c => c.time > fvg1m.time)
-        const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, bias)
-        if (entryCandle) entrySignal = 'Sweep+BOS+1mIFVG'
+        const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, sweepBias)
+        if (entryCandle) return sweepBias === 'bullish' ? 'LONG' : 'SHORT'
       }
     }
   }
 
-  // 5M BOS fallback — signal fires even without 1m IFVG entry
-  if (!entrySignal) entrySignal = 'Sweep+BOS'
-
-  const direction = bias === 'bullish' ? 'LONG' : 'SHORT'
-  return { direction, bosTime: latestBOS.time, signal: entrySignal }
+  // 5M fallback: BOS confirmed = enter
+  return sweepBias === 'bullish' ? 'LONG' : 'SHORT'
 }
