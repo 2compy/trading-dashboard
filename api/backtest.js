@@ -153,30 +153,12 @@ function bsFloor(candles, t) {
   return idx
 }
 
-// ── Per-symbol SL/TP ──────────────────────────────────────────────────────────
-function getTPSL(symbol, bias, entryPrice, sweepPrice, pdhl, recent5m) {
-  if (symbol === 'MNQ1!') {
-    // Fixed 25pt SL / 50pt TP
-    return {
-      slPrice: bias === 'bullish' ? entryPrice - 25  : entryPrice + 25,
-      tpPrice: bias === 'bullish' ? entryPrice + 50  : entryPrice - 50,
-    }
+// ── SL/TP: fixed 50pt SL / 75pt TP for all symbols ───────────────────────────
+function getTPSL(symbol, bias, entryPrice) {
+  return {
+    slPrice: bias === 'bullish' ? entryPrice - 50 : entryPrice + 50,
+    tpPrice: bias === 'bullish' ? entryPrice + 75 : entryPrice - 75,
   }
-  if (symbol === 'MGC1!') {
-    // Fixed 20pt SL / 30pt TP
-    return {
-      slPrice: bias === 'bullish' ? entryPrice - 20 : entryPrice + 20,
-      tpPrice: bias === 'bullish' ? entryPrice + 30 : entryPrice - 30,
-    }
-  }
-  // MES1! / Sl1! — daily H/L based
-  if (!pdhl) return null
-  const buffer  = (pdhl.high - pdhl.low) * 0.005
-  const slPrice = sweepPrice
-    ? (bias === 'bullish' ? sweepPrice - buffer : sweepPrice + buffer)
-    : (bias === 'bullish' ? entryPrice - buffer * 5 : entryPrice + buffer * 5)
-  const tpPrice = bias === 'bullish' ? pdhl.high : pdhl.low
-  return { slPrice, tpPrice }
 }
 
 // ── Main backtest ─────────────────────────────────────────────────────────────
@@ -246,7 +228,7 @@ function runBacktest(candles5m, candles1m, symbol) {
     const entryPrice = entryCandle.close
 
     // ── SL / TP per symbol ───────────────────────────────────────────────────
-    const tpsl = getTPSL(symbol, bias, entryPrice, sweepPrice, pdhl, recent5m)
+    const tpsl = getTPSL(symbol, bias, entryPrice)
     if (!tpsl) continue
     const { slPrice, tpPrice } = tpsl
 
