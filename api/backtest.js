@@ -62,22 +62,38 @@ function parseCandles(data) {
   return candles
 }
 
-// ── Time helpers ──────────────────────────────────────────────────────────────
+// ── Time helpers (cached formatters + memoized results) ──────────────────────
+const _dateFmt = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  year: 'numeric', month: '2-digit', day: '2-digit',
+})
+const _timeFmt = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  hour: 'numeric', minute: 'numeric', hour12: false,
+})
+const _dateCache = new Map()
+const _minsCache = new Map()
+
 function getETDateStr(ts) {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(new Date(ts * 1000))
+  // Round to 5-min boundary for cache efficiency (same day)
+  const key = Math.floor(ts / 300) * 300
+  let v = _dateCache.get(key)
+  if (v !== undefined) return v
+  v = _dateFmt.format(new Date(ts * 1000))
+  _dateCache.set(key, v)
+  return v
 }
 
 function getETMinutes(ts) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    hour: 'numeric', minute: 'numeric', hour12: false,
-  }).formatToParts(new Date(ts * 1000))
+  const key = Math.floor(ts / 60) * 60
+  let v = _minsCache.get(key)
+  if (v !== undefined) return v
+  const parts = _timeFmt.formatToParts(new Date(ts * 1000))
   const h = parseInt(parts.find(p => p.type === 'hour').value)
   const m = parseInt(parts.find(p => p.type === 'minute').value)
-  return h * 60 + m
+  v = h * 60 + m
+  _minsCache.set(key, v)
+  return v
 }
 
 // Kill zones: London (3-5am ET), NY open (8:30am-12pm ET), NY PM (1:30-3pm ET)
@@ -637,8 +653,8 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
 
     // TP: dynamic, minimum R:R per symbol
-    const rr = SYMBOL_RR[symbol] || MIN_RR
-    const minTPDist = slDist * rr
+    const minRR_sym = SYMBOL_RR[symbol] || MIN_RR
+    const minTPDist = slDist * minRR_sym
     const maxTPDist = minTPDist + 30
 
     const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
@@ -658,7 +674,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     if (bias === 'bearish' && tpPrice >= entryPrice) continue
 
     const tpDist = Math.abs(tpPrice - entryPrice)
-    if (tpDist / slDist < MIN_RR) continue
+    if (tpDist / slDist < minRR_sym) continue
 
     // Simulate: use 1m candles if available, else 5m
     const entryIdx1m = candles1m?.length ? candles1m.findIndex(c => c.time >= entryCandle.time) : -1
@@ -681,7 +697,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
 
     const pnlPoints  = outcome === 'win' ? tpDist : -slDist
     const pnlDollars = parseFloat((pnlPoints * multiplier).toFixed(2))
-    const rr         = parseFloat((tpDist / slDist).toFixed(2))
+    const rrActual   = parseFloat((tpDist / slDist).toFixed(2))
 
     trades.push({
       id: trades.length + 1, time: entryCandle.time, exitTime, bias,
@@ -689,7 +705,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
       stopPrice:   parseFloat(slPrice.toFixed(4)),
       targetPrice: parseFloat(tpPrice.toFixed(4)),
       exitPrice:   parseFloat(exitPrice.toFixed(4)),
-      outcome, pnlDollars, rr,
+      outcome, pnlDollars, rr: rrActual,
       signal: 'IFVG-Mid-Retrace',
     })
 
@@ -741,21 +757,9 @@ export default async function handler(req, res) {
     ])
 
     // Route to symbol-specific strategy
-    let trades
-    if (symbol === 'MGC1!') {
-      const mgcTrades  = runBacktestMGC(candles5m)
-      const ifvgTrades = runBacktestIFVGMid(candles5m, candles1m, symbol, CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
-      const all = [...mgcTrades, ...ifvgTrades].sort((a, b) => a.time - b.time)
-      trades = []; let lastTime = 0
-      for (const t of all) {
-        if (t.time - lastTime < 600) continue
-        t.id = trades.length + 1
-        trades.push(t)
-        lastTime = t.time
-      }
-    } else {
-      trades = runBacktest(candles5m, candles1m, symbol)
-    }
+    const trades = symbol === 'MGC1!'
+      ? runBacktestMGC(candles5m)
+      : runBacktest(candles5m, candles1m, symbol)
 
     const wins     = trades.filter(t => t.outcome === 'win').length
     const losses   = trades.filter(t => t.outcome === 'loss').length
