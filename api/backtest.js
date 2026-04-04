@@ -256,23 +256,22 @@ function runBacktestMGC(candles5m) {
     // ── 1h FVG check: no open FVG blocking path to TP ────────────────────────
     if (hasFVGBlocking(recent1h, now5m.close, tpPrice)) continue
 
-    // ── 5m FVG in bias direction ──────────────────────────────────────────────
-    const fvgs5m = detectFVGs(recent5m).filter(f => f.type === bias)
+    // ── 5m FVG (IFVG): at least 5pts wide, bias direction ───────────────────
+    const fvgs5m = detectFVGs(recent5m).filter(f => f.type === bias && f.top - f.bottom >= 5)
     if (!fvgs5m.length) continue
     const fvg5m = fvgs5m[fvgs5m.length - 1]
 
-    // ── 5m BOS after the FVG as confirmation ─────────────────────────────────
-    const post5mFVG = recent5m.filter(c => c.time > fvg5m.time)
-    if (post5mFVG.length < 3) continue
-    const { highs: hc, lows: lc } = detectSwings(post5mFVG, 2)
-    const bosConfirm = detectBOS(post5mFVG, hc, lc).filter(b => b.type === bias)
-    if (!bosConfirm.length) continue
-
-    // ── Entry: next 5m candle after confirmation BOS ──────────────────────────
-    const bosIdx     = candles5m.findIndex(c => c.time >= bosConfirm[bosConfirm.length - 1].time)
-    const entryCandle = bosIdx >= 0 ? candles5m[bosIdx + 1] : null
+    // ── Entry: first candle that retraces to the FVG midpoint ────────────────
+    const fvgStartIdx = candles5m.findIndex(c => c.time > fvg5m.time)
+    if (fvgStartIdx < 0) continue
+    const postFVG = candles5m.slice(fvgStartIdx, fvgStartIdx + 50)
+    let entryCandle = null
+    for (const c of postFVG) {
+      if (bias === 'bullish' && c.low  <= fvg5m.mid) { entryCandle = c; break }
+      if (bias === 'bearish' && c.high >= fvg5m.mid) { entryCandle = c; break }
+    }
     if (!entryCandle) continue
-    const entryPrice = entryCandle.open
+    const entryPrice = fvg5m.mid  // enter exactly at the FVG midpoint
 
     // ── SL: $200 risk per contract. MGC multiplier = 10, so 200/10 = 20 points
     const slPrice = bias === 'bullish' ? entryPrice - 20 : entryPrice + 20
