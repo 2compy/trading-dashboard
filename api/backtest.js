@@ -358,10 +358,14 @@ function runBacktest(candles5m, candles1m, symbol) {
   const dailyHL = buildDailyHL(candles5m)
   let lastTradeTime = 0
 
+  // Only iterate 5m candles that fall within the 1m data range
+  const m1Start = candles1m.length ? candles1m[0].time : 0
+
   for (let i = 20; i < candles5m.length - 1; i++) {
     const now5m    = candles5m[i]
     const recent5m = candles5m.slice(Math.max(0, i - 30), i + 1)
 
+    if (now5m.time < m1Start) continue
     if (!isKillZone(now5m.time)) continue
     if (now5m.time - lastTradeTime < 1200) continue
 
@@ -392,7 +396,7 @@ function runBacktest(candles5m, candles1m, symbol) {
     const bias = sweepBias
 
     // Entry: 1M FVG + IFVG retrace after BOS
-    const m1After = candles1m.filter(c => c.time >= latestBOS.time && c.time <= now5m.time + 300)
+    const m1After = candles1m.filter(c => c.time >= latestBOS.time && c.time <= latestBOS.time + 7200)
     if (m1After.length < 5) continue
 
     const fvgs1m = detectFVGs(m1After).filter(f => f.type === bias)
