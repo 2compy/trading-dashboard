@@ -20,7 +20,7 @@ export default function LiveChart() {
       grid: { vertLines: { color: '#111827' }, horzLines: { color: '#111827' } },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: '#1f2937' },
-      timeScale: { borderColor: '#1f2937', timeVisible: true },
+      timeScale: { borderColor: '#1f2937', timeVisible: true, timezone: 'America/New_York' },
       width:  chartContainerRef.current.clientWidth,
       height: chartContainerRef.current.clientHeight,
     })
