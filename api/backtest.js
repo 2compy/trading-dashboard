@@ -226,14 +226,27 @@ function runBacktestMGC(candles5m) {
     // MGC1! runs 24/7 — no kill zone filter
     if (now5m.time - lastTradeTime < 1200) continue
 
-    // ── HTF bias: last BOS on 1h ─────────────────────────────────────────────
+    // ── 4h trend direction (required — only trade with the 4h trend) ──────────
+    const now4hIdx = candles4h.findLastIndex(c => c.time <= now5m.time)
+    if (now4hIdx < 5) continue
+    const recent4h = candles4h.slice(Math.max(0, now4hIdx - 20), now4hIdx + 1)
+    const { highs: h4h, lows: l4h } = detectSwings(recent4h, 2)
+    const bos4h = detectBOS(recent4h, h4h, l4h)
+    if (!bos4h.length) continue
+    const trend4h = bos4h[bos4h.length - 1].type  // 4h tells us the only allowed direction
+
+    // ── 1h bias must agree with 4h trend ─────────────────────────────────────
     const now1hIdx = candles1h.findLastIndex(c => c.time <= now5m.time)
     if (now1hIdx < 10) continue
     const recent1h = candles1h.slice(Math.max(0, now1hIdx - 20), now1hIdx + 1)
     const { highs: h1h, lows: l1h } = detectSwings(recent1h, 2)
     const bos1h = detectBOS(recent1h, h1h, l1h)
     if (!bos1h.length) continue
-    const bias = bos1h[bos1h.length - 1].type
+    const bias1h = bos1h[bos1h.length - 1].type
+
+    // Both timeframes must agree — no counter-trend trades ever
+    if (bias1h !== trend4h) continue
+    const bias = trend4h
 
     // ── TP at nearest 1h swing H/L beyond current price ──────────────────────
     let tpPrice = null
@@ -247,11 +260,7 @@ function runBacktestMGC(candles5m) {
     if (!tpPrice) continue
 
     // ── 4h FVG check: no open FVG blocking path to TP ────────────────────────
-    const now4hIdx = candles4h.findLastIndex(c => c.time <= now5m.time)
-    if (now4hIdx >= 3) {
-      const recent4h = candles4h.slice(Math.max(0, now4hIdx - 20), now4hIdx + 1)
-      if (hasFVGBlocking(recent4h, now5m.close, tpPrice)) continue
-    }
+    if (hasFVGBlocking(recent4h, now5m.close, tpPrice)) continue
 
     // ── 1h FVG check: no open FVG blocking path to TP ────────────────────────
     if (hasFVGBlocking(recent1h, now5m.close, tpPrice)) continue
