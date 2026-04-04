@@ -572,7 +572,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
 }
 
 // ── Strategy B: IFVG Midpoint Retrace backtest ──────────────────────────────
-function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
+function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn = isKillZone) {
   const trades = []
 
   if (!candles5m.length) return trades
@@ -587,14 +587,14 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
 
   for (const ifvg of allIFVGs) {
     // Must be in kill zone at inversion time
-    if (!isKillZone(ifvg.inversionTime)) continue
+    if (!killZoneFn(ifvg.inversionTime)) continue
 
     // Find entry: midpoint retrace after inversion
     const entryCandle = findMidRetrace(candles5m, ifvg)
     if (!entryCandle) continue
 
     // Must be in kill zone at entry time
-    if (!isKillZone(entryCandle.time)) continue
+    if (!killZoneFn(entryCandle.time)) continue
 
     // Cooldown: 20 min between trades
     if (entryCandle.time - lastTradeTime < 1200) continue
@@ -718,9 +718,21 @@ export default async function handler(req, res) {
     ])
 
     // Route to symbol-specific strategy
-    const trades = symbol === 'MGC1!'
-      ? runBacktestMGC(candles5m)
-      : runBacktest(candles5m, candles1m, symbol)
+    let trades
+    if (symbol === 'MGC1!') {
+      const mgcTrades  = runBacktestMGC(candles5m)
+      const ifvgTrades = runBacktestIFVGMid(candles5m, candles1m, symbol, CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
+      const all = [...mgcTrades, ...ifvgTrades].sort((a, b) => a.time - b.time)
+      trades = []; let lastTime = 0
+      for (const t of all) {
+        if (t.time - lastTime < 1200) continue
+        t.id = trades.length + 1
+        trades.push(t)
+        lastTime = t.time
+      }
+    } else {
+      trades = runBacktest(candles5m, candles1m, symbol)
+    }
 
     const wins     = trades.filter(t => t.outcome === 'win').length
     const losses   = trades.filter(t => t.outcome === 'loss').length
