@@ -265,22 +265,31 @@ function runBacktestMGC(candles5m) {
     // ── 1h FVG check: no open FVG blocking path to TP ────────────────────────
     if (hasFVGBlocking(recent1h, now5m.close, tpPrice)) continue
 
-    // ── 5m FVG (IFVG): at least 5pts wide, bias direction ───────────────────
-    const fvgs5m = detectFVGs(recent5m).filter(f => f.type === bias && f.top - f.bottom >= 5)
+    // ── 5m FVG: longs need 5pts wide, shorts need 7pts wide ─────────────────
+    const minFVGWidth = bias === 'bearish' ? 7 : 5
+    const fvgs5m = detectFVGs(recent5m).filter(f => f.type === bias && f.top - f.bottom >= minFVGWidth)
     if (!fvgs5m.length) continue
     const fvg5m = fvgs5m[fvgs5m.length - 1]
 
-    // ── Entry: first candle that retraces to the FVG midpoint ────────────────
+    // ── Entry: retrace to midpoint, but only if it hasn't been touched before ─
+    // If price retraces to the midpoint more than once the FVG is weakened — skip
     const fvgStartIdx = candles5m.findIndex(c => c.time > fvg5m.time)
     if (fvgStartIdx < 0) continue
     const postFVG = candles5m.slice(fvgStartIdx, fvgStartIdx + 50)
-    let entryCandle = null
+
+    let touchCount = 0, inTouch = false, entryCandle = null
     for (const c of postFVG) {
-      if (bias === 'bullish' && c.low  <= fvg5m.mid) { entryCandle = c; break }
-      if (bias === 'bearish' && c.high >= fvg5m.mid) { entryCandle = c; break }
+      const touched = bias === 'bullish' ? c.low <= fvg5m.mid : c.high >= fvg5m.mid
+      if (touched && !inTouch) {
+        touchCount++
+        inTouch = true
+        if (touchCount === 1) entryCandle = c  // only enter on the very first touch
+      } else if (!touched) {
+        inTouch = false
+      }
     }
-    if (!entryCandle) continue
-    const entryPrice = fvg5m.mid  // enter exactly at the FVG midpoint
+    if (!entryCandle || touchCount > 1) continue  // skip if never touched or touched more than once
+    const entryPrice = fvg5m.mid
 
     // ── SL: $200 risk per contract. MGC multiplier = 10, so 200/10 = 20 points
     const slPrice = bias === 'bullish' ? entryPrice - 20 : entryPrice + 20
