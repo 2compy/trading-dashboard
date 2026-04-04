@@ -80,11 +80,11 @@ function getETMinutes(ts) {
   return h * 60 + m
 }
 
-// Kill zones: London (3-5am ET), NY open (9:30-11:30am ET), NY PM (1:30-3pm ET)
+// Kill zones: London (3-5am ET), NY open (8:30am-12pm ET), NY PM (1:30-3pm ET)
 function isKillZone(ts) {
   const mins = getETMinutes(ts)
   return (mins >= 180 && mins < 300) ||
-         (mins >= 570 && mins < 690) ||
+         (mins >= 510 && mins < 720) ||
          (mins >= 810 && mins < 900)
 }
 
@@ -172,6 +172,20 @@ function detectBOS(candles, highs, lows) {
       bos.push({ type: 'bearish', price: lastLow.price,  time: curr.time })
   }
   return bos
+}
+
+// ── Session H/L (current day's H/L from earlier candles) ─────────────────────
+function getSessionHL(candles5m, nowTs) {
+  const todayStr = getETDateStr(nowTs)
+  const todayCandles = candles5m.filter(c => getETDateStr(c.time) === todayStr)
+  if (todayCandles.length <= 5) return null
+  const sessionCandles = todayCandles.slice(0, -3)
+  let high = -Infinity, low = Infinity
+  for (const c of sessionCandles) {
+    if (c.high > high) high = c.high
+    if (c.low  < low)  low  = c.low
+  }
+  return { high, low }
 }
 
 // Returns true if any open FVG on these candles overlaps the path from price → target
@@ -370,24 +384,41 @@ function runBacktest(candles5m, candles1m, symbol) {
     if (now5m.time - lastTradeTime < 1200) continue
 
     const pdhl = getPrevDayHL(dailyHL, now5m.time)
-    if (!pdhl) continue
 
-    // Confluence 1: Daily H/L sweep (required)
+    // Confluence 1: Daily H/L sweep OR session H/L sweep
     let sweepBias = null, sweepWickExtreme = null, sweepTime = null
-    for (let j = recent5m.length - 1; j >= 0; j--) {
-      const c = recent5m[j]
-      if (c.low < pdhl.low && c.close > pdhl.low) {
-        sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
+
+    if (pdhl) {
+      for (let j = recent5m.length - 1; j >= 0; j--) {
+        const c = recent5m[j]
+        if (c.low < pdhl.low && c.close > pdhl.low) {
+          sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
+        }
+        if (c.high > pdhl.high && c.close < pdhl.high) {
+          sweepBias = 'bearish'; sweepWickExtreme = c.high; sweepTime = c.time; break
+        }
       }
-      if (c.high > pdhl.high && c.close < pdhl.high) {
-        sweepBias = 'bearish'; sweepWickExtreme = c.high; sweepTime = c.time; break
+    }
+
+    if (!sweepBias) {
+      const sessionHL = getSessionHL(candles5m, now5m.time)
+      if (sessionHL) {
+        for (let j = recent5m.length - 1; j >= 0; j--) {
+          const c = recent5m[j]
+          if (c.low < sessionHL.low && c.close > sessionHL.low) {
+            sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
+          }
+          if (c.high > sessionHL.high && c.close < sessionHL.high) {
+            sweepBias = 'bearish'; sweepWickExtreme = c.high; sweepTime = c.time; break
+          }
+        }
       }
     }
     if (!sweepBias) continue
 
     // Confluence 2: BOS on 5m AFTER the sweep, same direction (required)
     const postSweep5m = recent5m.filter(c => c.time > sweepTime)
-    if (postSweep5m.length < 4) continue
+    if (postSweep5m.length < 3) continue
     const { highs: h5, lows: l5 } = detectSwings(postSweep5m, 2)
     const bosList = detectBOS(postSweep5m, h5, l5).filter(b => b.type === sweepBias)
     if (!bosList.length) continue
@@ -505,7 +536,6 @@ export default async function handler(req, res) {
     res.setHeader('Cache-Control', 's-maxage=3600')
     return res.status(200).json({
       symbol, trades, wins, losses, winRate, totalPnl, dataNote,
-      candles5m, candles1m,
     })
   } catch (err) {
     return res.status(500).json({ error: err.message })

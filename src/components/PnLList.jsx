@@ -1,4 +1,4 @@
-import { useStore } from '../store'
+import { useStore, calcFuturesPnl } from '../store'
 
 export default function PnLList() {
   const { trades, livePrice, closeTrade } = useStore()
@@ -8,15 +8,13 @@ export default function PnLList() {
   const totalRealized   = closed.reduce((s, t) => s + (t.pnl || 0), 0)
   const totalUnrealized = open.reduce((s, t) => {
     const current = livePrice[t.symbol] || t.entryPrice
-    const mult = t.side === 'LONG' ? 1 : -1
-    return s + (current - t.entryPrice) / t.entryPrice * t.amount * mult
+    return s + calcFuturesPnl(t.entryPrice, current, t.symbol, t.side)
   }, 0)
 
   const allEntries = trades.map(t => {
     if (t.status === 'OPEN') {
       const current = livePrice[t.symbol] || t.entryPrice
-      const mult = t.side === 'LONG' ? 1 : -1
-      const unr = (current - t.entryPrice) / t.entryPrice * t.amount * mult
+      const unr = calcFuturesPnl(t.entryPrice, current, t.symbol, t.side)
       return { ...t, displayPnl: unr, isOpen: true }
     }
     return { ...t, displayPnl: t.pnl, isOpen: false }
