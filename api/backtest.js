@@ -9,13 +9,6 @@ const SYMBOL_MAP = {
   'Sl1!':  'SIL=F',
 }
 
-// ETF proxies for Polygon.io 1m data (free tier covers stocks/ETFs)
-const POLYGON_PROXY = {
-  'MES1!': 'SPY',
-  'MNQ1!': 'QQQ',
-  'MGC1!': 'GLD',
-  'Sl1!':  'SLV',
-}
 
 const CONTRACT_MULTIPLIER = { 'MES1!': 5, 'MNQ1!': 2, 'MGC1!': 10, 'Sl1!': 5 }
 const MIN_RR = 2
@@ -48,42 +41,17 @@ async function fetch5mChunked(ticker) {
     .sort((a, b) => a.time - b.time)
 }
 
-// Fetch 3 months of 1m data from Polygon.io (requires POLYGON_API_KEY env var)
-// Uses ETF proxies: SPY/QQQ/GLD/SLV (same price patterns, free tier compatible)
-// Falls back to Yahoo 7d if no API key set
-async function fetch1mPolygon(symbol) {
-  const apiKey = process.env.POLYGON_API_KEY
-  const proxy  = POLYGON_PROXY[symbol]
-
-  if (!apiKey || !proxy) {
-    // Fallback: Yahoo Finance 7 days
-    const ticker  = SYMBOL_MAP[symbol]
-    const now     = Math.floor(Date.now() / 1000)
-    const period1 = now - 7 * 24 * 60 * 60
-    const url     = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&period1=${period1}&period2=${now}&includePrePost=false`
-    try {
-      const res  = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
-      const data = await res.json()
-      return parseCandles(data)
-    } catch { return [] }
-  }
-
-  // Polygon.io: fetch 3 months in 2 parallel chunks of ~45 days
-  const now = new Date()
-  const chunks = await Promise.all([0, 1].map(async chunk => {
-    const to   = new Date(now)
-    to.setDate(to.getDate() - chunk * 45)
-    const from = new Date(to)
-    from.setDate(from.getDate() - 45)
-    const fromStr = from.toISOString().split('T')[0]
-    const toStr   = to.toISOString().split('T')[0]
-    const url = `https://api.polygon.io/v2/aggs/ticker/${proxy}/range/1/minute/${fromStr}/${toStr}?adjusted=true&sort=asc&limit=50000&apiKey=${apiKey}`
-    const res  = await fetch(url)
+// Fetch 7 days of 1m data from Yahoo Finance
+async function fetch1mRecent(ticker) {
+  const now     = Math.floor(Date.now() / 1000)
+  const period1 = now - 7 * 24 * 60 * 60
+  const url     = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&period1=${period1}&period2=${now}&includePrePost=false`
+  try {
+    const res  = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
     const data = await res.json()
-    if (data.status === 'ERROR' || data.error) throw new Error(data.error || data.message || 'Polygon error')
-    return data.results || []
-  }))
-  const results = chunks.flat()
+    return parseCandles(data)
+  } catch { return [] }
+}
 
   // Polygon returns { t: timestamp_ms, o, h, l, c }
   const seen = new Set()
@@ -370,7 +338,7 @@ export default async function handler(req, res) {
   try {
     const [candles5m, candles1m] = await Promise.all([
       fetch5mChunked(ticker),
-      fetch1mPolygon(symbol),
+      fetch1mRecent(ticker),
     ])
 
     const trades   = runBacktest(candles5m, candles1m, symbol)
@@ -381,9 +349,7 @@ export default async function handler(req, res) {
 
     const earliest = candles5m.length ? new Date(candles5m[0].time * 1000).toISOString().split('T')[0] : null
     const latest   = candles5m.length ? new Date(candles5m[candles5m.length - 1].time * 1000).toISOString().split('T')[0] : null
-    const hasKey   = !!process.env.POLYGON_API_KEY
-    const src      = hasKey ? `Polygon 3mo (${candles1m.length} candles)` : `Yahoo 7d (${candles1m.length} candles)`
-    const dataNote = `5m: ${earliest} → ${latest} | 1m: ${src}`
+    const dataNote = `5m: ${earliest} → ${latest} | 1m: Yahoo 7d (${candles1m.length} candles)`
 
     res.setHeader('Cache-Control', 's-maxage=3600')
     return res.status(200).json({
