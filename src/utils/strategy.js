@@ -278,48 +278,46 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
 export function getLiveSignal(candles5m, candles1m) {
   if (!candles5m?.length || !candles1m?.length) return null
 
-  const nowTs  = candles5m[candles5m.length - 1]?.time
+  const recent5m = candles5m.slice(-30)
+  const nowTs    = recent5m[recent5m.length - 1]?.time
   if (!nowTs) return null
 
-  // Step 1: Previous day H/L derived from 5m candles
+  // Confluence 1: Daily H/L sweep
   const dailyHL = buildDailyHL(candles5m)
   const pdhl    = getPrevDayHL(dailyHL, nowTs)
-  if (!pdhl) return null
-
-  // Step 2: Sweep on recent 5M
-  let bias = null, sweepTime = null
-
-  const recent5m = candles5m.slice(-30)
-  for (let j = recent5m.length - 1; j >= 0; j--) {
-    const c = recent5m[j]
-    if (c.low < pdhl.low && c.close > pdhl.low)   { bias = 'bullish'; sweepTime = c.time; break }
-    if (c.high > pdhl.high && c.close < pdhl.high) { bias = 'bearish'; sweepTime = c.time; break }
+  let sweepBias = null
+  if (pdhl) {
+    for (let j = recent5m.length - 1; j >= 0; j--) {
+      const c = recent5m[j]
+      if (c.low < pdhl.low && c.close > pdhl.low)   { sweepBias = 'bullish'; break }
+      if (c.high > pdhl.high && c.close < pdhl.high) { sweepBias = 'bearish'; break }
+    }
   }
-  if (!bias) return null
 
-  // Step 3: BOS on 5M after sweep
-  const post5m = candles5m.filter(c => c.time >= sweepTime).slice(-20)
-  const { highs: h5, lows: l5 } = detectSwings(post5m, 2)
-  const bos5m = detectBOS(post5m, h5, l5).filter(b => b.type === bias)
-  if (!bos5m.length) return null
-  const bosTime = bos5m[bos5m.length - 1].time
+  // Confluence 2: BOS on 5M
+  const { highs: h5, lows: l5 } = detectSwings(recent5m, 2)
+  const allBOS    = detectBOS(recent5m, h5, l5)
+  const latestBOS = allBOS.length ? allBOS[allBOS.length - 1] : null
+  const bosBias   = latestBOS?.type || null
 
-  // Step 4: FVG on 1M after BOS, then wait for IFVG entry
-  const m1After  = candles1m.filter(c => c.time >= bosTime)
+  // Need at least one confluence
+  const bullVotes = (sweepBias === 'bullish' ? 1 : 0) + (bosBias === 'bullish' ? 1 : 0)
+  const bearVotes = (sweepBias === 'bearish' ? 1 : 0) + (bosBias === 'bearish' ? 1 : 0)
+  if (bullVotes === 0 && bearVotes === 0) return null
+  const bias = bullVotes >= bearVotes ? 'bullish' : 'bearish'
+
+  const anchorTime = latestBOS?.time || recent5m[0].time
+
+  // Entry: 1M FVG + IFVG
+  const m1After = candles1m.filter(c => c.time >= anchorTime)
   if (m1After.length < 5) return null
-  const fvgs1m   = detectFVGs(m1After).filter(f => f.type === bias)
+  const fvgs1m = detectFVGs(m1After).filter(f => f.type === bias)
   if (!fvgs1m.length) return null
-  const fvg1m    = fvgs1m[fvgs1m.length - 1]
+  const fvg1m = fvgs1m[fvgs1m.length - 1]
 
-  const m1PostFVG    = m1After.filter(c => c.time > fvg1m.time)
-  const entryCandle  = findIFVGEntry(m1PostFVG, fvg1m, bias)
+  const m1PostFVG   = m1After.filter(c => c.time > fvg1m.time)
+  const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, bias)
   if (!entryCandle) return null
-
-  // Step 6: RR check
-  const currentPrice = candles1m[candles1m.length - 1].close
-  const tpPrice      = bias === 'bullish' ? pdhl.high : pdhl.low
-  if (bias === 'bullish' && tpPrice <= currentPrice) return null
-  if (bias === 'bearish' && tpPrice >= currentPrice) return null
 
   return bias === 'bullish' ? 'LONG' : 'SHORT'
 }
