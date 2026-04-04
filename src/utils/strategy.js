@@ -30,11 +30,12 @@ function getETMinutes(ts) {
   return h * 60 + m
 }
 
-// Kill zones: London open (3–5am ET), NY open (9:30–11:30am ET)
+// Kill zones: London open (3–5am ET), NY open (9:30–11:30am ET), NY PM (1:30–3pm ET)
 export function isKillZone(ts) {
   const mins = getETMinutes(ts)
   return (mins >= 180 && mins < 300) ||   // London: 3:00–5:00 AM ET
-         (mins >= 570 && mins < 690)      // NY open: 9:30–11:30 AM ET
+         (mins >= 570 && mins < 690) ||   // NY open: 9:30–11:30 AM ET
+         (mins >= 810 && mins < 900)      // NY PM: 1:30–3:00 PM ET
 }
 
 // ── Daily H/L from 5M candles ─────────────────────────────────────────────────

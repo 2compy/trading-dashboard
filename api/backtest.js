@@ -91,12 +91,12 @@ function getETMinutes(ts) {
   return h * 60 + m
 }
 
-// Kill zones: London open (3-5am ET) and NY open (9:30-11:30am ET)
-// These are the only times ICT setups have institutional backing
+// Kill zones: London open (3-5am ET), NY open (9:30-11:30am ET), NY PM (1:30-3pm ET)
 export function isKillZone(ts) {
   const mins = getETMinutes(ts)
   return (mins >= 180 && mins < 300) ||   // London: 3:00–5:00 AM ET
-         (mins >= 570 && mins < 690)      // NY open: 9:30–11:30 AM ET
+         (mins >= 570 && mins < 690) ||   // NY open: 9:30–11:30 AM ET
+         (mins >= 810 && mins < 900)      // NY PM: 1:30–3:00 PM ET
 }
 
 // ── Strategy primitives ───────────────────────────────────────────────────────
@@ -273,20 +273,13 @@ function runBacktest(candles5m, candles1m, symbol) {
     // Both confluences confirmed in the same direction
     const bias = sweepBias
 
-    // ── Entry: 1M FVG + IFVG after BOS ──────────────────────────────────────
-    const m1After = candles1m.filter(c => c.time >= latestBOS.time && c.time <= now5m.time + 300)
-    if (m1After.length < 5) continue
-
-    const fvgs1m = detectFVGs(m1After).filter(f => f.type === bias)
-    if (!fvgs1m.length) continue
-    const fvg1m = fvgs1m[fvgs1m.length - 1]
-    if (fvg1m.top - fvg1m.bottom < 7) continue  // must be at least 7pts wide
-
-    const m1PostFVG   = m1After.filter(c => c.time > fvg1m.time)
-    const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, bias)
+    // ── Entry: next 5M candle after BOS confirms ────────────────────────────
+    // (1m IFVG is used for live signal precision; backtest uses 5m for full history)
+    const bosIdx     = candles5m.findIndex(c => c.time >= latestBOS.time)
+    const entryCandle = bosIdx >= 0 ? candles5m[bosIdx + 1] : null
     if (!entryCandle) continue
 
-    const entryPrice = entryCandle.close
+    const entryPrice = entryCandle.open
 
     // ── SL / TP ──────────────────────────────────────────────────────────────
     const tpsl = getTPSL(bias, entryPrice, sweepWickExtreme, recent5m)
@@ -302,7 +295,7 @@ function runBacktest(candles5m, candles1m, symbol) {
     if (tpDist / slDist < MIN_RR) continue  // enforce minimum 2:1 RR
 
     // ── Simulate on 5M ───────────────────────────────────────────────────────
-    const entryIdx = bsFloor(candles5m, entryCandle.time)
+    const entryIdx = candles5m.indexOf(entryCandle)
     const future5m = candles5m.slice(entryIdx + 1, entryIdx + 200)
     let outcome = null, exitPrice = null, exitTime = null
 
