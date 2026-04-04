@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useStore, FUTURES } from './store'
 import LiveChart from './components/LiveChart'
-import TradeManager from './components/TradeManager'
+import LiveTrading from './components/LiveTrading'
+import PaperTrading from './components/PaperTrading'
 import TradeLogs from './components/TradeLogs'
 import Portfolio from './components/Portfolio'
 import Backtest from './components/Backtest'
@@ -9,12 +10,13 @@ import Strategy from './components/Strategy'
 import ErrorBoundary from './components/ErrorBoundary'
 
 const TABS = [
-  { id: 'charts',    label: 'Live Charts',   icon: '📈' },
-  { id: 'trades',    label: 'Trade Manager', icon: '⚙️' },
-  { id: 'logs',      label: 'Trade Logs',    icon: '📋' },
-  { id: 'portfolio', label: 'Portfolio',     icon: '💼' },
-  { id: 'backtest',  label: 'Backtest',      icon: '🔬' },
-  { id: 'strategy', label: 'Strategy',     icon: '🧠' },
+  { id: 'charts',    label: 'Live Charts',    icon: '📈' },
+  { id: 'live',      label: 'Live',           icon: '⚡' },
+  { id: 'paper',     label: 'Paper',          icon: '📝' },
+  { id: 'logs',      label: 'Trade Logs',     icon: '📋' },
+  { id: 'portfolio', label: 'Portfolio',      icon: '💼' },
+  { id: 'backtest',  label: 'Backtest',       icon: '🔬' },
+  { id: 'strategy',  label: 'Strategy',       icon: '🧠' },
 ]
 
 const USE_LIVE = !!import.meta.env.VITE_USE_LIVE_API
@@ -167,13 +169,11 @@ export default function App() {
       <main className="app-main">
         <ErrorBoundary key={tab}>
           {tab === 'charts'    && <LiveChart />}
-          {tab === 'trades'    && <TradeManager />}
+          {tab === 'live'      && <LiveTrading />}
+          {tab === 'paper'     && <PaperTrading />}
           {tab === 'logs'      && <TradeLogs />}
           {tab === 'portfolio' && <Portfolio />}
           {tab === 'backtest'  && <Backtest onBack={() => setTab('charts')} />}
           {tab === 'strategy' && <Strategy />}
         </ErrorBoundary>
-      </main>
-    </div>
-  )
-}
+      </ma
