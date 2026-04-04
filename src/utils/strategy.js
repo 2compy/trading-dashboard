@@ -274,16 +274,18 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
     if (bias === 'bullish' && entryPrice - slPrice < 15) slPrice = entryPrice - 15
     if (bias === 'bearish' && slPrice - entryPrice < 15) slPrice = entryPrice + 15
     const slDist  = Math.abs(entryPrice - slPrice)
-    if (slDist === 0 || slDist > 30) continue
+    if (slDist === 0 || slDist > 60) continue
 
+    const minTPDist = slDist * MIN_RR
+    const maxTPDist = minTPDist + 30
     const { highs, lows } = detectSwings(recent5m, 3)
     let tpPrice
     if (bias === 'bullish') {
-      const c = highs.filter(h => h.price > entryPrice + 50 && h.price <= entryPrice + 70).sort((a, b) => a.price - b.price)
-      tpPrice = c[0]?.price ?? entryPrice + 60
+      const c = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+      tpPrice = c[0]?.price ?? entryPrice + minTPDist
     } else {
-      const c = lows.filter(l => l.price < entryPrice - 50 && l.price >= entryPrice - 70).sort((a, b) => b.price - a.price)
-      tpPrice = c[0]?.price ?? entryPrice - 60
+      const c = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
+      tpPrice = c[0]?.price ?? entryPrice - minTPDist
     }
 
     if (bias === 'bullish' && tpPrice <= entryPrice) continue
