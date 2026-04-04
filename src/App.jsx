@@ -5,6 +5,7 @@ import TradeManager from './components/TradeManager'
 import TradeLogs from './components/TradeLogs'
 import Portfolio from './components/Portfolio'
 import Backtest from './components/Backtest'
+import Strategy from './components/Strategy'
 import ErrorBoundary from './components/ErrorBoundary'
 
 const TABS = [
@@ -13,6 +14,7 @@ const TABS = [
   { id: 'logs',      label: 'Trade Logs',    icon: '📋' },
   { id: 'portfolio', label: 'Portfolio',     icon: '💼' },
   { id: 'backtest',  label: 'Backtest',      icon: '🔬' },
+  { id: 'strategy', label: 'Strategy',     icon: '🧠' },
 ]
 
 const USE_LIVE = !!import.meta.env.VITE_USE_LIVE_API
@@ -169,6 +171,7 @@ export default function App() {
           {tab === 'logs'      && <TradeLogs />}
           {tab === 'portfolio' && <Portfolio />}
           {tab === 'backtest'  && <Backtest onBack={() => setTab('charts')} />}
+          {tab === 'strategy' && <Strategy />}
         </ErrorBoundary>
       </main>
     </div>
