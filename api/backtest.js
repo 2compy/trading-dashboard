@@ -21,10 +21,10 @@ const SYMBOL_MAP = {
   'MES1!': 'MES=F',
   'MNQ1!': 'MNQ=F',
   'MGC1!': 'MGC=F',
-  'SL1!': 'SIL=F',
+  'Sl1!': 'SIL=F',
 }
 
-const CONTRACT_MULTIPLIER = { 'MES1!': 5, 'MNQ1!': 2, 'MGC1!': 10, 'SL1!': 5 }
+const CONTRACT_MULTIPLIER = { 'MES1!': 5, 'MNQ1!': 2, 'MGC1!': 10, 'Sl1!': 5 }
 const SL_DOLLARS = 200
 const TP_DOLLARS = 300
 
@@ -42,7 +42,7 @@ const PREFERRED_KZ = {
   'MES1!': ['NY Open', 'SB', 'PM'],
   'MNQ1!': ['NY Open', 'SB', 'PM'],
   'MGC1!': ['London', 'NY Open', 'SB'],
-  'SL1!': ['London', 'NY Open', 'SB'],
+  'Sl1!': ['London', 'NY Open', 'SB'],
 }
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
