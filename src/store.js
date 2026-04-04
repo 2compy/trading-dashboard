@@ -200,8 +200,9 @@ export const useStore = create((set, get) => ({
     side: 'LONG',
     tradeCount: 1,
   },
-  // Per-symbol ON/OFF toggle
+  // Per-symbol ON/OFF and side
   symbolEnabled: Object.fromEntries(FUTURES.map(f => [f.symbol, true])),
+  symbolSide: Object.fromEntries(FUTURES.map(f => [f.symbol, 'LONG'])),
 
   updateTradeSetting: (field, value) => set(state => ({
     tradeSettings: { ...state.tradeSettings, [field]: value },
@@ -209,6 +210,10 @@ export const useStore = create((set, get) => ({
 
   toggleSymbol: (symbol) => set(state => ({
     symbolEnabled: { ...state.symbolEnabled, [symbol]: !state.symbolEnabled[symbol] },
+  })),
+
+  setSymbolSide: (symbol, side) => set(state => ({
+    symbolSide: { ...state.symbolSide, [symbol]: side },
   })),
 
   // --- Master switch ---
@@ -230,11 +235,12 @@ export const useStore = create((set, get) => ({
       if (!signal) return
 
       const price = state.livePrice[f.symbol]
+      const side = state.symbolSide[f.symbol] || signal
       for (let i = 0; i < count; i++) {
         const trade = {
           id: get().nextId + i,
           symbol: f.symbol,
-          side: signal,
+          side,
           entryPrice: price,
           amount: parseFloat(settings.amount) || 0,
           stopLoss:   settings.stopLoss   ? parseFloat(settings.stopLoss)   : null,
@@ -260,13 +266,14 @@ export const useStore = create((set, get) => ({
     const price    = state.livePrice[symbol]
     const settings = state.tradeSettings
     const count    = settings.tradeCount === 'infinite' ? 1 : settings.tradeCount
+    const side     = state.symbolSide[symbol] || 'LONG'
 
     const newTrades = []
     for (let i = 0; i < count; i++) {
       newTrades.push({
         id: state.nextId + i,
         symbol,
-        side: settings.side,
+        side,
         entryPrice: price,
         amount: parseFloat(settings.amount) || 0,
         stopLoss:   settings.stopLoss   ? parseFloat(settings.stopLoss)   : null,
