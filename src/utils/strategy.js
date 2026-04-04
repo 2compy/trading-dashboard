@@ -304,17 +304,15 @@ export function getLiveSignal(candles5m, candles1m) {
   if (!bos5m.length) return null
   const bosTime = bos5m[bos5m.length - 1].time
 
-  // Step 4: FVG on 5M after BOS
-  const afterBos5m = post5m.filter(c => c.time >= bosTime)
-  if (afterBos5m.length < 3) return null
-  const fvgs5m = detectFVGs(afterBos5m).filter(f => f.type === bias)
-  if (!fvgs5m.length) return null
-  const lastFVG5m = fvgs5m[fvgs5m.length - 1]
+  // Step 4: FVG on 1M after BOS, then wait for IFVG entry
+  const m1After  = candles1m.filter(c => c.time >= bosTime)
+  if (m1After.length < 5) return null
+  const fvgs1m   = detectFVGs(m1After).filter(f => f.type === bias)
+  if (!fvgs1m.length) return null
+  const fvg1m    = fvgs1m[fvgs1m.length - 1]
 
-  // Step 5: IFVG entry on 1M — first candle that closes back through the FVG
-  const m1After      = candles1m.filter(c => c.time > lastFVG5m.time)
-  if (m1After.length < 3) return null
-  const entryCandle  = findIFVGEntry(m1After, lastFVG5m, bias)
+  const m1PostFVG    = m1After.filter(c => c.time > fvg1m.time)
+  const entryCandle  = findIFVGEntry(m1PostFVG, fvg1m, bias)
   if (!entryCandle) return null
 
   // Step 6: RR check

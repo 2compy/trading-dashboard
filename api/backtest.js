@@ -157,9 +157,8 @@ function bsFloor(candles, t) {
 function runBacktest(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
   const trades     = []
-  const has1m      = candles1m.length > 0
 
-  if (!candles5m.length) return trades
+  if (!candles5m.length || !candles1m.length) return trades
 
   const dailyHL = buildDailyHL(candles5m)
   let lastTradeTime = 0
@@ -194,24 +193,15 @@ function runBacktest(candles5m, candles1m, symbol) {
     if (!bos5m.length) continue
     const bosTime = bos5m[bos5m.length - 1].time
 
-    // Step 4: FVG on 5M after BOS
-    const afterBos5m = post5m.filter(c => c.time >= bosTime)
-    if (afterBos5m.length < 3) continue
-    const fvgs5m = detectFVGs(afterBos5m).filter(f => f.type === bias)
-    if (!fvgs5m.length) continue
-    const fvg5m = fvgs5m[fvgs5m.length - 1]
+    // Step 4: Find FVG on 1M after BOS, then wait for IFVG entry
+    const m1After = candles1m.filter(c => c.time >= bosTime)
+    if (m1After.length < 5) continue
+    const fvgs1m = detectFVGs(m1After).filter(f => f.type === bias)
+    if (!fvgs1m.length) continue
+    const fvg1m = fvgs1m[fvgs1m.length - 1]
 
-    // Step 5: IFVG entry — use 1M if available, else 5M
-    let entryCandle = null
-    if (has1m) {
-      const m1After = candles1m.filter(c => c.time > fvg5m.time && c.time <= now5m.time + 300)
-      entryCandle = findIFVGEntry(m1After, fvg5m, bias)
-    }
-    if (!entryCandle) {
-      // Fall back to 5M IFVG
-      const after5m = candles5m.filter(c => c.time > fvg5m.time && c.time <= now5m.time + 300)
-      entryCandle = findIFVGEntry(after5m, fvg5m, bias)
-    }
+    const m1PostFVG = m1After.filter(c => c.time > fvg1m.time)
+    const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, bias)
     if (!entryCandle) continue
 
     const entryPrice = entryCandle.close
@@ -261,7 +251,7 @@ function runBacktest(candles5m, candles1m, symbol) {
       outcome,
       pnlDollars,
       rr,
-      signal:      'DailyHL-Sweep+BOS+5mFVG+1mIFVG',
+      signal:      'DailyHL-Sweep+BOS+1mIFVG',
     })
 
     lastTradeTime = now5m.time
