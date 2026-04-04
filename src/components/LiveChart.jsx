@@ -20,7 +20,30 @@ export default function LiveChart() {
       grid: { vertLines: { color: '#111827' }, horzLines: { color: '#111827' } },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: '#1f2937' },
-      timeScale: { borderColor: '#1f2937', timeVisible: true, timezone: 'America/New_York' },
+      timeScale: {
+        borderColor: '#1f2937',
+        timeVisible: true,
+        timezone: 'America/New_York',
+        tickMarkFormatter: (time) => {
+          const d = new Date(time * 1000)
+          return d.toLocaleString('en-US', {
+            timeZone: 'America/New_York',
+            hour: '2-digit', minute: '2-digit',
+            hour12: false,
+          })
+        },
+      },
+      localization: {
+        timeFormatter: (time) => {
+          const d = new Date(time * 1000)
+          return d.toLocaleString('en-US', {
+            timeZone: 'America/New_York',
+            month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit',
+            hour12: false,
+          })
+        },
+      },
       width:  chartContainerRef.current.clientWidth,
       height: chartContainerRef.current.clientHeight,
     })
