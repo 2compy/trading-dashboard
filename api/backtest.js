@@ -251,7 +251,7 @@ function findIFVGEntry(candles, fvg, bias) {
 // ── Fixed SL per symbol (null = use sweep wick) ─────────────────────────────
 const FIXED_SL = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
 // ── Min R:R per symbol ──────────────────────────────────────────────────────
-const SYMBOL_RR = { 'MES1!': 3, 'MGC1!': 3 }
+const SYMBOL_RR = { 'MES1!': 3, 'MNQ1!': 3, 'MGC1!': 3 }
 // ── Min FVG width for IFVG detection, per symbol ────────────────────────────
 // MGC ~3100 → 3pt, MES ~5500 → 7pt, MNQ ~19000 → 20pt, Silver ~32 → 0.10
 const MIN_FVG_WIDTH = {
