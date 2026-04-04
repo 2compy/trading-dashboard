@@ -96,17 +96,17 @@ const LONG_STRATEGIES = {
 function RuleRow({ label, value }) {
   return (
     <div style={{
-      display: 'flex', gap: 12, padding: '8px 0',
+      display: 'flex', gap: 10, padding: '5px 0',
       borderBottom: '1px solid #111827',
     }}>
       <span style={{
-        fontSize: 11, fontWeight: 700, color: '#6b7280',
+        fontSize: 10, fontWeight: 700, color: '#6b7280',
         textTransform: 'uppercase', letterSpacing: '0.5px',
-        minWidth: 110, flexShrink: 0,
+        minWidth: 90, flexShrink: 0,
       }}>
         {label}
       </span>
-      <span style={{ fontSize: 13, color: '#d1d5db' }}>{value}</span>
+      <span style={{ fontSize: 11, color: '#d1d5db' }}>{value}</span>
     </div>
   )
 }
@@ -115,9 +115,9 @@ function SideCard({ side, strat, color, bgColor, badgeBg, badgeColor }) {
   if (!strat) {
     return (
       <div style={{
-        flex: 1, background: '#0a0a0a', borderRadius: 10, padding: 20,
+        flex: 1, background: '#0a0a0a', borderRadius: 8, padding: 14,
         border: '1px dashed #1f2937', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', minHeight: 200,
+        justifyContent: 'center', minHeight: 120,
       }}>
         <span style={{ fontSize: 13, color: '#4b5563', fontStyle: 'italic' }}>
           {side} strategy not configured yet
@@ -128,34 +128,34 @@ function SideCard({ side, strat, color, bgColor, badgeBg, badgeColor }) {
 
   return (
     <div style={{
-      flex: 1, background: '#0a0a0a', borderRadius: 10, padding: 16,
+      flex: 1, background: '#0a0a0a', borderRadius: 8, padding: 12,
       border: `1px solid ${bgColor}`,
     }}>
       {/* Side badge + strategy name */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <span style={{
-          fontSize: 11, fontWeight: 800, padding: '3px 10px', borderRadius: 4,
+          fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 4,
           background: badgeBg, color: badgeColor, letterSpacing: '0.5px',
         }}>
           {side}
         </span>
-        <span style={{ fontSize: 13, fontWeight: 600, color: '#e5e7eb' }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: '#e5e7eb' }}>
           {strat.name}
         </span>
       </div>
 
       {/* Rules */}
-      <div style={{ marginBottom: 14 }}>
+      <div style={{ marginBottom: 10 }}>
         <div style={{
-          fontSize: 10, fontWeight: 700, color, textTransform: 'uppercase',
-          letterSpacing: '0.5px', marginBottom: 8,
+          fontSize: 9, fontWeight: 700, color, textTransform: 'uppercase',
+          letterSpacing: '0.5px', marginBottom: 5,
         }}>
           Entry Rules
         </div>
         {strat.rules.map((rule, i) => (
           <div key={i} style={{
-            fontSize: 12, color: '#d1d5db', lineHeight: 1.5,
-            padding: '6px 0', borderBottom: '1px solid #111827',
+            fontSize: 11, color: '#d1d5db', lineHeight: 1.4,
+            padding: '4px 0', borderBottom: '1px solid #111827',
           }}>
             {rule}
           </div>
@@ -163,10 +163,10 @@ function SideCard({ side, strat, color, bgColor, badgeBg, badgeColor }) {
       </div>
 
       {/* Risk */}
-      <div style={{ marginBottom: 12 }}>
+      <div style={{ marginBottom: 8 }}>
         <div style={{
-          fontSize: 10, fontWeight: 700, color: '#f87171', textTransform: 'uppercase',
-          letterSpacing: '0.5px', marginBottom: 6,
+          fontSize: 9, fontWeight: 700, color: '#f87171', textTransform: 'uppercase',
+          letterSpacing: '0.5px', marginBottom: 4,
         }}>
           Risk Management
         </div>
@@ -179,12 +179,12 @@ function SideCard({ side, strat, color, bgColor, badgeBg, badgeColor }) {
 
       {/* Signal labels */}
       <div style={{
-        display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8,
+        display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 6,
       }}>
         {strat.signals.map(s => (
           <code key={s} style={{
-            fontSize: 11, fontWeight: 700, color: '#fbbf24',
-            background: '#1c1917', padding: '2px 8px', borderRadius: 4,
+            fontSize: 10, fontWeight: 700, color: '#fbbf24',
+            background: '#1c1917', padding: '2px 6px', borderRadius: 4,
           }}>
             {s}
           </code>
@@ -200,14 +200,14 @@ function SymbolStrategy({ symbol }) {
   const longStrat  = LONG_STRATEGIES[symbol]
 
   return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12 }}>
       {/* Symbol header */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 12,
-        paddingBottom: 12, borderBottom: '1px solid #1f2937',
+        display: 'flex', alignItems: 'center', gap: 10,
+        paddingBottom: 8, borderBottom: '1px solid #1f2937',
       }}>
-        <span style={{ fontWeight: 700, fontSize: 18 }}>{symbol}</span>
-        <span style={{ fontSize: 12, color: '#6b7280' }}>{info?.name}</span>
+        <span style={{ fontWeight: 700, fontSize: 15 }}>{symbol}</span>
+        <span style={{ fontSize: 11, color: '#6b7280' }}>{info?.name}</span>
         <span style={{
           marginLeft: 'auto', fontSize: 11, color: '#9ca3af',
           background: '#111827', padding: '3px 10px', borderRadius: 6,
@@ -217,7 +217,7 @@ function SymbolStrategy({ symbol }) {
       </div>
 
       {/* Short + Long side by side */}
-      <div style={{ display: 'flex', gap: 12 }}>
+      <div style={{ display: 'flex', gap: 8 }}>
         <SideCard
           side="SHORT"
           strat={shortStrat}
@@ -241,7 +241,7 @@ function SymbolStrategy({ symbol }) {
 
 export default function Strategy() {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{
         fontSize: 11, fontWeight: 600, color: '#6b7280',
         textTransform: 'uppercase', letterSpacing: '0.5px',

@@ -140,7 +140,7 @@ export default function Backtest({ onBack }) {
               <table>
                 <thead>
                   <tr>
-                    {['#', 'Time', 'Bias', 'Signal', 'Entry', 'Stop', 'Target', 'Exit', 'R:R', 'P&L $', 'Result'].map(h => (
+                    {['#', 'Time', 'Bias', 'Signal', 'Units', 'Entry', 'Stop', 'Target', 'Exit', 'R:R', 'P&L $', 'Result'].map(h => (
                       <th key={h}>{h}</th>
                     ))}
                   </tr>
@@ -164,6 +164,7 @@ export default function Backtest({ onBack }) {
                           {t.signal}
                         </span>
                       </td>
+                      <td style={{ fontFamily: 'monospace' }}>{t.contracts || 1}</td>
                       <td style={{ fontFamily: 'monospace' }}>{t.entryPrice}</td>
                       <td style={{ fontFamily: 'monospace', color: '#f87171' }}>{t.stopPrice}</td>
                       <td style={{ fontFamily: 'monospace', color: '#4ade80' }}>{t.targetPrice}</td>
