@@ -314,7 +314,7 @@ export function getLiveSignal(candles5m, candles1m) {
   const fvgs1m = detectFVGs(m1After).filter(f => f.type === bias)
   if (!fvgs1m.length) return null
   const fvg1m = fvgs1m[fvgs1m.length - 1]
-  if (fvg1m.top - fvg1m.bottom < 10) return null  // must be at least 10pts wide
+  if (fvg1m.top - fvg1m.bottom < 7) return null  // must be at least 7pts wide
 
   const m1PostFVG   = m1After.filter(c => c.time > fvg1m.time)
   const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, bias)
