@@ -265,14 +265,13 @@ function runBacktestMGC(candles5m) {
   const candles1h  = buildHTFCandles(candles5m, 60)
   const candles4h  = buildHTFCandles(candles5m, 240)
   let lastTradeTime = 0
-  const usedFVGs   = new Set()  // prevent same FVG from firing more than once
 
   for (let i = 20; i < candles5m.length - 1; i++) {
     const now5m    = candles5m[i]
     const recent5m = candles5m.slice(Math.max(0, i - 36), i + 1)  // ~3hrs of 5m
 
     if (!isMGCKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 1200) continue
+    if (now5m.time - lastTradeTime < 600) continue
 
     // ── 4h trend direction (required — only trade with the 4h trend) ──────────
     const now4hIdx = candles4h.findLastIndex(c => c.time <= now5m.time)
@@ -337,8 +336,6 @@ function runBacktestMGC(candles5m) {
       }
     }
     if (!entryCandle || touchCount > 1) continue  // skip if never touched or touched more than once
-    if (usedFVGs.has(fvg5m.time)) continue        // this FVG already triggered a trade
-    usedFVGs.add(fvg5m.time)
     const entryPrice = fvg5m.mid
 
     // ── SL: $200 risk per contract. MGC multiplier = 10, so 200/10 = 20 points
@@ -445,7 +442,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     const recent5m = candles5m.slice(Math.max(0, i - 30), i + 1)
 
     if (!isKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 1200) continue
+    if (now5m.time - lastTradeTime < 600) continue
 
     const pdhl = getPrevDayHL(dailyHL, now5m.time)
 
@@ -597,7 +594,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     if (!killZoneFn(entryCandle.time)) continue
 
     // Cooldown: 20 min between trades
-    if (entryCandle.time - lastTradeTime < 1200) continue
+    if (entryCandle.time - lastTradeTime < 600) continue
 
     // Dedup
     if (usedIFVGs.has(ifvg.time)) continue
@@ -693,7 +690,7 @@ function runBacktest(candles5m, candles1m, symbol) {
   const final = []
   let lastTime = 0
   for (const t of all) {
-    if (t.time - lastTime < 1200) continue
+    if (t.time - lastTime < 600) continue
     t.id = final.length + 1
     final.push(t)
     lastTime = t.time
@@ -725,7 +722,7 @@ export default async function handler(req, res) {
       const all = [...mgcTrades, ...ifvgTrades].sort((a, b) => a.time - b.time)
       trades = []; let lastTime = 0
       for (const t of all) {
-        if (t.time - lastTime < 1200) continue
+        if (t.time - lastTime < 600) continue
         t.id = trades.length + 1
         trades.push(t)
         lastTime = t.time
