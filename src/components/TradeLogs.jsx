@@ -1,9 +1,13 @@
-import { useStore } from '../store'
+import { useStore, calcFuturesPnl } from '../store'
 
 function fmt(iso) {
   if (!iso) return '—'
-  const d = new Date(iso)
-  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString()
+  return new Date(iso).toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+    hour12: false,
+  }) + ' ET'
 }
 
 function StatCard({ label, value, color }) {
@@ -50,8 +54,7 @@ export default function TradeLogs() {
               <tbody>
                 {open.map(t => {
                   const current = livePrice[t.symbol] || t.entryPrice
-                  const mult = t.side === 'LONG' ? 1 : -1
-                  const unr = ((current - t.entryPrice) / t.entryPrice * t.amount * mult)
+                  const unr = calcFuturesPnl(t.entryPrice, current, t.symbol, t.side)
                   return (
                     <tr key={t.id}>
                       <td style={{ color: '#4b5563' }}>{t.id}</td>

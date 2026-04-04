@@ -55,7 +55,7 @@ function generateCandles(base, count = 200) {
   return candles
 }
 
-import { getLiveSignal } from './utils/strategy'
+import { getLiveSignal, calcFuturesPnl } from './utils/strategy'
 
 function runStrategy(candlesBySymbol, symbol) {
   const c5m = candlesBySymbol[symbol]?.['5m'] || []
@@ -63,7 +63,45 @@ function runStrategy(candlesBySymbol, symbol) {
   return getLiveSignal(c5m, c1m)
 }
 
+// Re-export for components
+export { calcFuturesPnl }
+
 const USE_LIVE = !!import.meta.env.VITE_USE_LIVE_API
+
+// Shared SL/TP auto-close logic — works in both sim and live mode
+function checkSLTP(state) {
+  const hasOpen = state.trades.some(
+    t => t.status === 'OPEN' && (t.stopLoss != null || t.takeProfit != null)
+  )
+  if (!hasOpen) return null
+
+  const now = new Date().toISOString()
+  const updated = state.trades.map(t => {
+    if (t.status !== 'OPEN') return t
+    if (t.stopLoss == null && t.takeProfit == null) return t
+    const price = state.livePrice[t.symbol]
+    if (price == null) return t
+
+    const isLong = t.side === 'LONG'
+    let exitPrice = null
+
+    if (isLong) {
+      if (t.stopLoss   != null && price <= t.stopLoss)   exitPrice = t.stopLoss
+      else if (t.takeProfit != null && price >= t.takeProfit) exitPrice = t.takeProfit
+    } else {
+      if (t.stopLoss   != null && price >= t.stopLoss)   exitPrice = t.stopLoss
+      else if (t.takeProfit != null && price <= t.takeProfit) exitPrice = t.takeProfit
+    }
+
+    if (exitPrice == null) return t
+
+    const pnl = calcFuturesPnl(t.entryPrice, exitPrice, t.symbol, t.side)
+    return { ...t, status: 'CLOSED', exitPrice, exitTime: now, pnl }
+  })
+
+  // Only return if something changed
+  return updated.some((t, i) => t !== state.trades[i]) ? updated : null
+}
 
 export const useStore = create(
   persist(
@@ -153,6 +191,11 @@ export const useStore = create(
           })
 
           set({ livePrice: updatedPrice, priceChange: updatedChange, candleData: updatedData, apiError: null })
+
+          // Check SL/TP on live price updates
+          const updatedState = get()
+          const closedTrades = checkSLTP(updatedState)
+          if (closedTrades) set({ trades: closedTrades })
         } catch (err) {
           set({ apiError: err.message })
         }
@@ -182,27 +225,12 @@ export const useStore = create(
           updatedChange[f.symbol] = parseFloat((newClose - f.base).toFixed(2))
         })
 
-        // --- SL/TP auto-close in sim mode ---
-        const updatedTrades = state.trades.map(t => {
-          if (t.status !== 'OPEN') return t
-          if (t.stopLoss === null && t.takeProfit === null) return t
-          const price = updatedPrice[t.symbol]
-          if (!price) return t
-          const mult = t.side === 'LONG' ? 1 : -1
-          const hitSL = t.stopLoss  !== null && (t.side === 'LONG' ? price <= t.stopLoss  : price >= t.stopLoss)
-          const hitTP = t.takeProfit !== null && (t.side === 'LONG' ? price >= t.takeProfit : price <= t.takeProfit)
-          if (!hitSL && !hitTP) return t
-          const exitPrice = hitSL ? t.stopLoss : t.takeProfit
-          const pnl = parseFloat(((exitPrice - t.entryPrice) / t.entryPrice * t.amount * mult).toFixed(2))
-          return { ...t, status: 'CLOSED', exitPrice, exitTime: new Date().toISOString(), pnl }
-        })
+        set({ candleData: updatedData, livePrice: updatedPrice, priceChange: updatedChange })
 
-        set({
-          candleData: updatedData,
-          livePrice: updatedPrice,
-          priceChange: updatedChange,
-          trades: updatedTrades,
-        })
+        // Check SL/TP on sim price updates
+        const updatedState = get()
+        const closedTrades = checkSLTP(updatedState)
+        if (closedTrades) set({ trades: closedTrades })
       },
 
       advanceCandle: () => {
@@ -260,6 +288,8 @@ export const useStore = create(
 
       // Tracks when the last auto trade fired per symbol (unix seconds)
       lastAutoTradeTime: {},
+      // Tracks last fired BOS time per symbol for signal deduplication
+      lastFiredBosTime: {},
 
       // Called by the auto-trade interval when master switch is ON
       runAutoTrade: () => {
@@ -267,15 +297,14 @@ export const useStore = create(
         if (!state.masterSwitch) return
 
         const settings = state.tradeSettings
-        // FIX: parseInt ensures count is always a number, not a string
         const count = settings.tradeCount === 'infinite' ? 1 : parseInt(settings.tradeCount, 10) || 1
         const nowSec = Math.floor(Date.now() / 1000)
         const COOLDOWN = 60 // 1 minute between trades per symbol
 
-        // Capture nextId once before the loop to avoid the ID skip bug
         let nextId = get().nextId
         const newTrades = []
         const lastAutoUpdate = {}
+        const bosTimeUpdate = {}
 
         FUTURES.forEach(f => {
           if (!state.symbolEnabled[f.symbol]) return
@@ -283,11 +312,15 @@ export const useStore = create(
           const lastTime = state.lastAutoTradeTime[f.symbol] || 0
           if (nowSec - lastTime < COOLDOWN) return
 
-          const signal = runStrategy(state.mtfCandles, f.symbol)
-          if (!signal) return
+          const result = runStrategy(state.mtfCandles, f.symbol)
+          if (!result) return
+
+          // Signal deduplication: skip if this is the same BOS setup we already traded
+          if (state.lastFiredBosTime[f.symbol] === result.bosTime) return
 
           const price = state.livePrice[f.symbol]
-          const side = state.symbolSide[f.symbol] || signal
+          // Use strategy direction, not symbolSide (fixes counter-signal bug)
+          const side = result.direction
 
           for (let i = 0; i < count; i++) {
             newTrades.push({
@@ -304,9 +337,11 @@ export const useStore = create(
               exitTime: null,
               pnl: null,
               auto: true,
+              signal: result.signal,
             })
           }
           lastAutoUpdate[f.symbol] = nowSec
+          bosTimeUpdate[f.symbol] = result.bosTime
         })
 
         if (newTrades.length) {
@@ -314,6 +349,7 @@ export const useStore = create(
             trades: [...newTrades, ...s.trades],
             nextId,
             lastAutoTradeTime: { ...s.lastAutoTradeTime, ...lastAutoUpdate },
+            lastFiredBosTime: { ...s.lastFiredBosTime, ...bosTimeUpdate },
           }))
         }
       },
@@ -326,14 +362,14 @@ export const useStore = create(
         const state = get()
         const price    = state.livePrice[symbol]
         const settings = state.tradeSettings
-        // FIX: parseInt ensures count is always a number
         const count    = settings.tradeCount === 'infinite' ? 1 : parseInt(settings.tradeCount, 10) || 1
         const side     = state.symbolSide[symbol] || 'LONG'
+        const startId  = state.nextId
 
         const newTrades = []
         for (let i = 0; i < count; i++) {
           newTrades.push({
-            id: state.nextId + i,
+            id: startId + i,
             symbol,
             side,
             entryPrice: price,
@@ -356,9 +392,8 @@ export const useStore = create(
         set({
           trades: state.trades.map(t => {
             if (t.id !== id || t.status !== 'OPEN') return t
-            const exitPrice  = state.livePrice[t.symbol]
-            const multiplier = t.side === 'LONG' ? 1 : -1
-            const pnl = parseFloat(((exitPrice - t.entryPrice) / t.entryPrice * t.amount * multiplier).toFixed(2))
+            const exitPrice = state.livePrice[t.symbol]
+            const pnl = calcFuturesPnl(t.entryPrice, exitPrice, t.symbol, t.side)
             return { ...t, status: 'CLOSED', exitPrice, exitTime: new Date().toISOString(), pnl }
           })
         })
@@ -366,10 +401,12 @@ export const useStore = create(
     }),
     {
       name: 'tradedash-v1',
-      // Only persist trades and trade counter — everything else is runtime state
       partialize: (state) => ({
         trades: state.trades,
         nextId: state.nextId,
+        tradeSettings: state.tradeSettings,
+        symbolEnabled: state.symbolEnabled,
+        symbolSide: state.symbolSide,
       }),
     }
   )

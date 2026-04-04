@@ -5,6 +5,7 @@ import TradeManager from './components/TradeManager'
 import TradeLogs from './components/TradeLogs'
 import Portfolio from './components/Portfolio'
 import Backtest from './components/Backtest'
+import ErrorBoundary from './components/ErrorBoundary'
 
 const TABS = [
   { id: 'charts',    label: 'Live Charts',   icon: '📈' },
@@ -19,8 +20,8 @@ const USE_LIVE = !!import.meta.env.VITE_USE_LIVE_API
 export default function App() {
   const [tab, setTab] = useState('charts')
   const {
-    tickPrice, advanceCandle, pollQuotes, fetchCandles, fetchMTFCandles,
-    trades, apiError, selectedSymbol, timeframe,
+    tickPrice, advanceCandle, pollQuotes, fetchMTFCandles,
+    trades, apiError,
     masterSwitch, toggleMasterSwitch, runAutoTrade,
     marketOpen, refreshMarketStatus,
   } = useStore()
@@ -33,11 +34,7 @@ export default function App() {
     return () => { clearInterval(tick); clearInterval(candle) }
   }, [])
 
-  // Live API — chart candles
-  useEffect(() => {
-    if (!USE_LIVE) return
-    fetchCandles(selectedSymbol, timeframe)
-  }, [selectedSymbol, timeframe])
+  // Live API — chart candles handled by LiveChart.jsx useEffect
 
   // Live API — quotes
   useEffect(() => {
@@ -166,11 +163,13 @@ export default function App() {
       </nav>
 
       <main className="app-main">
-        {tab === 'charts'    && <LiveChart />}
-        {tab === 'trades'    && <TradeManager />}
-        {tab === 'logs'      && <TradeLogs />}
-        {tab === 'portfolio' && <Portfolio />}
-        {tab === 'backtest'  && <Backtest onBack={() => setTab('charts')} />}
+        <ErrorBoundary key={tab}>
+          {tab === 'charts'    && <LiveChart />}
+          {tab === 'trades'    && <TradeManager />}
+          {tab === 'logs'      && <TradeLogs />}
+          {tab === 'portfolio' && <Portfolio />}
+          {tab === 'backtest'  && <Backtest onBack={() => setTab('charts')} />}
+        </ErrorBoundary>
       </main>
     </div>
   )

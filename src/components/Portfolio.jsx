@@ -1,4 +1,4 @@
-import { useStore } from '../store'
+import { useStore, calcFuturesPnl } from '../store'
 import PnLList from './PnLList'
 
 function StatCard({ label, value, color }) {
@@ -36,8 +36,7 @@ export default function Portfolio() {
   const totalPnl = closed.reduce((s, t) => s + (t.pnl || 0), 0)
   const unrealizedPnl = open.reduce((s, t) => {
     const current = livePrice[t.symbol] || t.entryPrice
-    const mult = t.side === 'LONG' ? 1 : -1
-    return s + (current - t.entryPrice) / t.entryPrice * t.amount * mult
+    return s + calcFuturesPnl(t.entryPrice, current, t.symbol, t.side)
   }, 0)
 
   const wins = closed.filter(t => t.pnl > 0).length
@@ -52,8 +51,7 @@ export default function Portfolio() {
     const symClosed = closed.filter(t => t.symbol === f.symbol)
     const symUnr = symOpen.reduce((s, t) => {
       const current = livePrice[t.symbol] || t.entryPrice
-      const mult = t.side === 'LONG' ? 1 : -1
-      return s + (current - t.entryPrice) / t.entryPrice * t.amount * mult
+      return s + calcFuturesPnl(t.entryPrice, current, t.symbol, t.side)
     }, 0)
     const symReal = symClosed.reduce((s, t) => s + (t.pnl || 0), 0)
     return { ...f, symOpen, symClosed, symUnr, symReal }
