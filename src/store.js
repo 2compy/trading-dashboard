@@ -83,13 +83,19 @@ export const useStore = create((set, get) => ({
   // --- Live API ---
   fetchMTFCandles: async (symbol) => {
     try {
-      const res  = await fetch(`/api/backtest?symbol=${encodeURIComponent(symbol)}`)
-      const data = await res.json()
-      if (data.error) return
+      const [res5m, res1m] = await Promise.all([
+        fetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=5m`),
+        fetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=1m`),
+      ])
+      const [data5m, data1m] = await Promise.all([res5m.json(), res1m.json()])
+      if (data5m.error || data1m.error) return
+      // 300 5m candles (~25 hrs) ensures prev-day H/L is available; 100 1m for entry detection
+      const candles5m = (data5m.candles || []).slice(-300)
+      const candles1m = (data1m.candles || []).slice(-100)
       set(state => ({
         mtfCandles: {
           ...state.mtfCandles,
-          [symbol]: { '5m': data.candles5m, '1m': data.candles1m },
+          [symbol]: { '5m': candles5m, '1m': candles1m },
         }
       }))
     } catch (_) {}
@@ -175,6 +181,44 @@ export const useStore = create((set, get) => ({
     })
 
     set({ candleData: updatedData, livePrice: updatedPrice, priceChange: updatedChange })
+    get().checkSimSLTP()
+  },
+
+  // Auto-close open sim trades when price hits SL or TP
+  checkSimSLTP: () => {
+    if (USE_LIVE) return
+    const state = get()
+    const hasOpen = state.trades.some(
+      t => t.status === 'OPEN' && (t.stopLoss != null || t.takeProfit != null)
+    )
+    if (!hasOpen) return
+
+    const now = new Date().toISOString()
+    set(s => ({
+      trades: s.trades.map(t => {
+        if (t.status !== 'OPEN') return t
+        if (t.stopLoss == null && t.takeProfit == null) return t
+        const price = s.livePrice[t.symbol]
+        if (price == null) return t
+
+        const isLong = t.side === 'LONG'
+        let exitPrice = null
+
+        if (isLong) {
+          if (t.stopLoss   != null && price <= t.stopLoss)   exitPrice = t.stopLoss
+          else if (t.takeProfit != null && price >= t.takeProfit) exitPrice = t.takeProfit
+        } else {
+          if (t.stopLoss   != null && price >= t.stopLoss)   exitPrice = t.stopLoss
+          else if (t.takeProfit != null && price <= t.takeProfit) exitPrice = t.takeProfit
+        }
+
+        if (exitPrice == null) return t
+
+        const multiplier = isLong ? 1 : -1
+        const pnl = parseFloat(((exitPrice - t.entryPrice) / t.entryPrice * t.amount * multiplier).toFixed(2))
+        return { ...t, status: 'CLOSED', exitPrice, exitTime: now, pnl }
+      })
+    }))
   },
 
   advanceCandle: () => {
@@ -257,9 +301,10 @@ export const useStore = create((set, get) => ({
 
       const price = state.livePrice[f.symbol]
       const side = state.symbolSide[f.symbol] || signal
+      const startId = get().nextId
       for (let i = 0; i < count; i++) {
         const trade = {
-          id: get().nextId + i,
+          id: startId + i,
           symbol: f.symbol,
           side,
           entryPrice: price,
