@@ -331,7 +331,7 @@ function runBacktestMGC(candles5m) {
 
     // ── Simulate on 5m ───────────────────────────────────────────────────────
     const entryIdx = candles5m.indexOf(entryCandle)
-    const future5m = candles5m.slice(entryIdx + 1, entryIdx + 300)
+    const future5m = candles5m.slice(entryIdx + 1, entryIdx + 600)
     let outcome = null, exitPrice = null, exitTime = null
 
     for (const fc of future5m) {
@@ -487,8 +487,8 @@ function runBacktest(candles5m, candles1m, symbol) {
     // Simulate on 1m if available, else 5m
     const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
     const simCandles = entryIdx1m >= 0 && entryIdx1m < candles1m.length - 1
-      ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 300)
-      : candles5m.slice(candles5m.findIndex(c => c.time >= entryCandle.time) + 1).slice(0, 200)
+      ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 720)
+      : candles5m.slice(candles5m.findIndex(c => c.time >= entryCandle.time) + 1).slice(0, 300)
     let outcome = null, exitPrice = null, exitTime = null
 
     for (const fc of simCandles) {

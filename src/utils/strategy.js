@@ -295,7 +295,7 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
     if (tpDist / slDist < MIN_RR) continue
 
     const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
-    const future1m   = candles1m.slice(entryIdx1m + 1, entryIdx1m + 300)
+    const future1m   = candles1m.slice(entryIdx1m + 1, entryIdx1m + 720)
     let outcome = null, exitPrice = null, exitTime = null
 
     for (const fc of future1m) {
