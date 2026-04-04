@@ -1,43 +1,32 @@
 import { FUTURES } from '../store'
 import { CONTRACT_MULTIPLIER } from '../utils/strategy'
 
+const FIXED_SL = { 'MES1!': 15, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
+
+function sweepBOSStrategy(symbol) {
+  return {
+    name: 'Daily Sweep + BOS + 1M IFVG',
+    confluences: [
+      { label: 'Kill Zones', value: 'London 3\u20135am ET, NY 8:30am\u201312pm ET, NY PM 1:30\u20133pm ET' },
+      { label: 'Confluence 1', value: 'Prev day H/L sweep OR session H/L sweep \u2014 wick through + close back' },
+      { label: 'Confluence 2', value: '5M BOS after sweep, same direction (min 3 post-sweep candles)' },
+      { label: 'Entry (primary)', value: '1M FVG (\u22653pt) + IFVG retrace after BOS' },
+      { label: 'Entry (fallback)', value: 'Next 5M candle open after BOS' },
+    ],
+    risk: [
+      { label: 'Stop Loss', value: `Fixed ${FIXED_SL[symbol]}pt ($${FIXED_SL[symbol] * CONTRACT_MULTIPLIER[symbol]} risk)` },
+      { label: 'Take Profit', value: 'Nearest swing H/L \u2265 SL\u00d72 distance (default = SL\u00d72)' },
+      { label: 'Min R:R', value: '2:1' },
+      { label: 'Cooldown', value: '10 min (backtest), 60s (live auto-trade)' },
+      { label: 'Multiplier', value: `$${CONTRACT_MULTIPLIER[symbol]} per point` },
+    ],
+    signal: 'Sweep+BOS+1mIFVG or Sweep+BOS',
+  }
+}
+
 const STRATEGIES = {
-  'MES1!': {
-    name: 'Daily Sweep + BOS + 1M IFVG',
-    confluences: [
-      { label: 'Kill Zones', value: 'London 3\u20135am ET, NY 8:30am\u201312pm ET, NY PM 1:30\u20133pm ET' },
-      { label: 'Confluence 1', value: 'Prev day H/L sweep OR session H/L sweep \u2014 wick through + close back' },
-      { label: 'Confluence 2', value: '5M BOS after sweep, same direction (min 3 post-sweep candles)' },
-      { label: 'Entry (primary)', value: '1M FVG (\u22653pt) + IFVG retrace after BOS' },
-      { label: 'Entry (fallback)', value: 'Next 5M candle open after BOS' },
-    ],
-    risk: [
-      { label: 'Stop Loss', value: 'Sweep wick extreme \u00b12pt buffer, min 15pt, max 60pt' },
-      { label: 'Take Profit', value: 'Nearest swing H/L \u2265 SL\u00d72 distance (default = SL\u00d72)' },
-      { label: 'Min R:R', value: '2:1' },
-      { label: 'Cooldown', value: '10 min (backtest), 60s (live auto-trade)' },
-      { label: 'Multiplier', value: `$${CONTRACT_MULTIPLIER['MES1!']} per point` },
-    ],
-    signal: 'Sweep+BOS+1mIFVG or Sweep+BOS',
-  },
-  'MNQ1!': {
-    name: 'Daily Sweep + BOS + 1M IFVG',
-    confluences: [
-      { label: 'Kill Zones', value: 'London 3\u20135am ET, NY 8:30am\u201312pm ET, NY PM 1:30\u20133pm ET' },
-      { label: 'Confluence 1', value: 'Prev day H/L sweep OR session H/L sweep \u2014 wick through + close back' },
-      { label: 'Confluence 2', value: '5M BOS after sweep, same direction (min 3 post-sweep candles)' },
-      { label: 'Entry (primary)', value: '1M FVG (\u22653pt) + IFVG retrace after BOS' },
-      { label: 'Entry (fallback)', value: 'Next 5M candle open after BOS' },
-    ],
-    risk: [
-      { label: 'Stop Loss', value: 'Sweep wick extreme \u00b12pt buffer, min 15pt, max 60pt' },
-      { label: 'Take Profit', value: 'Nearest swing H/L \u2265 SL\u00d72 distance (default = SL\u00d72)' },
-      { label: 'Min R:R', value: '2:1' },
-      { label: 'Cooldown', value: '10 min (backtest), 60s (live auto-trade)' },
-      { label: 'Multiplier', value: `$${CONTRACT_MULTIPLIER['MNQ1!']} per point` },
-    ],
-    signal: 'Sweep+BOS+1mIFVG or Sweep+BOS',
-  },
+  'MES1!': sweepBOSStrategy('MES1!'),
+  'MNQ1!': sweepBOSStrategy('MNQ1!'),
   'MGC1!': {
     name: 'HTF Bias + 4H/1H Clean + 5M FVG Midpoint',
     confluences: [
@@ -50,7 +39,7 @@ const STRATEGIES = {
       { label: '1M FVG Min', value: 'Bullish \u22655pt, Bearish \u22657pt' },
     ],
     risk: [
-      { label: 'Stop Loss', value: 'Fixed 20 points ($200 risk per contract)' },
+      { label: 'Stop Loss', value: `Fixed ${FIXED_SL['MGC1!']}pt ($${FIXED_SL['MGC1!'] * CONTRACT_MULTIPLIER['MGC1!']} risk)` },
       { label: 'Take Profit', value: 'Nearest 1H swing H/L beyond entry' },
       { label: 'Min R:R', value: '2:1' },
       { label: 'Cooldown', value: '10 min (backtest), 60s (live auto-trade)' },
@@ -58,24 +47,7 @@ const STRATEGIES = {
     ],
     signal: 'HTFBias+4h/1hClean+5mFVG+MidRetrace',
   },
-  'Sl1!': {
-    name: 'Daily Sweep + BOS + 1M IFVG',
-    confluences: [
-      { label: 'Kill Zones', value: 'London 3\u20135am ET, NY 8:30am\u201312pm ET, NY PM 1:30\u20133pm ET' },
-      { label: 'Confluence 1', value: 'Prev day H/L sweep OR session H/L sweep \u2014 wick through + close back' },
-      { label: 'Confluence 2', value: '5M BOS after sweep, same direction (min 3 post-sweep candles)' },
-      { label: 'Entry (primary)', value: '1M FVG (\u22653pt) + IFVG retrace after BOS' },
-      { label: 'Entry (fallback)', value: 'Next 5M candle open after BOS' },
-    ],
-    risk: [
-      { label: 'Stop Loss', value: 'Sweep wick extreme \u00b12pt buffer, min 15pt, max 60pt' },
-      { label: 'Take Profit', value: 'Nearest swing H/L \u2265 SL\u00d72 distance (default = SL\u00d72)' },
-      { label: 'Min R:R', value: '2:1' },
-      { label: 'Cooldown', value: '10 min (backtest), 60s (live auto-trade)' },
-      { label: 'Multiplier', value: `$${CONTRACT_MULTIPLIER['Sl1!']} per point` },
-    ],
-    signal: 'Sweep+BOS+1mIFVG or Sweep+BOS',
-  },
+  'Sl1!': sweepBOSStrategy('Sl1!'),
 }
 
 function RuleRow({ label, value }) {

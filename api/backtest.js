@@ -230,15 +230,13 @@ function findIFVGEntry(candles, fvg, bias) {
   return null
 }
 
+// ── Fixed SL per symbol ──────────────────────────────────────────────────────
+const FIXED_SL = { 'MES1!': 15, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
+
 // ── SL/TP for default strategy ────────────────────────────────────────────────
-// Dynamic TP window: scales with SL distance so R:R ≥ 2 is always achievable.
-// Matches frontend strategy.js logic.
-function getTPSL(bias, entryPrice, sweepWickExtreme, recent5m) {
-  let slPrice = bias === 'bullish' ? sweepWickExtreme - 2 : sweepWickExtreme + 2
-  if (bias === 'bullish' && entryPrice - slPrice < 15) slPrice = entryPrice - 15
-  if (bias === 'bearish' && slPrice - entryPrice < 15) slPrice = entryPrice + 15
-  const slDist = Math.abs(entryPrice - slPrice)
-  if (slDist > 60) return null
+function getTPSL(bias, entryPrice, sweepWickExtreme, recent5m, symbol) {
+  const slDist = FIXED_SL[symbol] || 15
+  const slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
 
   // Dynamic TP: minimum = SL * RR, search window extends 30pt beyond that
   const minTPDist = slDist * MIN_RR
@@ -515,7 +513,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     if (usedEntryTimes.has(entryCandle.time)) continue
 
     // SL/TP
-    const tpsl = getTPSL(bias, entryPrice, sweepWickExtreme, recent5m)
+    const tpsl = getTPSL(bias, entryPrice, sweepWickExtreme, recent5m, symbol)
     if (!tpsl) continue
     const { slPrice, tpPrice } = tpsl
 
@@ -603,13 +601,9 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     const bias       = ifvg.ifvgBias
     const entryPrice = ifvg.mid
 
-    // SL: opposite extreme of the FVG + 2pt buffer
-    const slPrice = bias === 'bullish'
-      ? ifvg.bottom - 2    // LONG: SL below FVG
-      : ifvg.top + 2       // SHORT: SL above FVG
-
-    const slDist = Math.abs(entryPrice - slPrice)
-    if (slDist < 3 || slDist > 60) continue
+    // SL: fixed per symbol
+    const slDist = FIXED_SL[symbol] || 15
+    const slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
 
     // TP: dynamic, minimum R:R ≥ 2
     const minTPDist = slDist * MIN_RR

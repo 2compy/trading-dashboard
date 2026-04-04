@@ -197,6 +197,7 @@ export function calcFuturesPnl(entryPrice, exitPrice, symbol, side) {
 }
 
 const MIN_RR = 2
+const FIXED_SL = { 'MES1!': 15, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
 const MIN_FVG_WIDTH = 7
 
 // ── Sweep detection helper ──────────────────────────────────────────────────
@@ -321,12 +322,9 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
 
     if (usedEntryTimes.has(entryCandle.time)) continue
 
-    // SL/TP
-    let slPrice = bias === 'bullish' ? sweepWickExtreme - 2 : sweepWickExtreme + 2
-    if (bias === 'bullish' && entryPrice - slPrice < 15) slPrice = entryPrice - 15
-    if (bias === 'bearish' && slPrice - entryPrice < 15) slPrice = entryPrice + 15
-    const slDist = Math.abs(entryPrice - slPrice)
-    if (slDist === 0 || slDist > 60) continue
+    // SL/TP — fixed SL per symbol
+    const slDist = FIXED_SL[symbol] || 15
+    const slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
 
     const minTPDist = slDist * MIN_RR
     const maxTPDist = minTPDist + 30
@@ -415,9 +413,8 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
     const bias       = ifvg.ifvgBias
     const entryPrice = ifvg.mid
 
-    const slPrice = bias === 'bullish' ? ifvg.bottom - 2 : ifvg.top + 2
-    const slDist  = Math.abs(entryPrice - slPrice)
-    if (slDist < 3 || slDist > 60) continue
+    const slDist  = FIXED_SL[symbol] || 15
+    const slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
 
     const minTPDist = slDist * MIN_RR
     const maxTPDist = minTPDist + 30
