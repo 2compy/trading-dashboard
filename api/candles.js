@@ -9,11 +9,11 @@ const SYMBOL_MAP = {
 }
 
 const RANGE_MAP = {
-  '1m':  '1d',
-  '5m':  '5d',
-  '15m': '5d',
-  '1h':  '1mo',
-  '1d':  '1y',
+  '1m':  '7d',    // Yahoo Finance max for 1m
+  '5m':  '60d',   // Yahoo Finance max for 5m
+  '15m': '60d',   // Yahoo Finance max for 15m
+  '1h':  '2y',
+  '1d':  '2y',
 }
 
 export default async function handler(req, res) {
