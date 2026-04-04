@@ -1,14 +1,23 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Strategy: Daily H/L (or Session H/L) Liquidity Sweep + BOS + 1M IFVG / 5M fallback
+// Strategy: DUAL — Sweep+BOS + IFVG Midpoint Retrace
 //
-// Rules (all required):
-//  1. Kill zone only: London 3–5am ET, NY open 8:30am–12pm ET, NY PM 1:30–3pm ET
-//  2. Liquidity sweep: prev day H/L OR session H/L — wick through + close back
-//  3. BOS on 5M AFTER the sweep, same direction (min 3 post-sweep candles)
-//  4. Entry: 1M FVG (min 3pt) + IFVG retrace; fallback = next 5m open after BOS
-//  5. SL = sweep wick extreme + 2pt buffer, max 30pt
-//  6. TP = nearest swing H/L in 50–70pt window (default 60pt)
-//  7. Skip if RR < 2
+// Either strategy can trigger a trade:
+//
+// A) Sweep + BOS:
+//   1. Kill zone only
+//   2. Liquidity sweep: prev day H/L OR session H/L — wick through + close back
+//   3. BOS on 5M AFTER the sweep, same direction
+//   4. Entry: 1M FVG + IFVG retrace; fallback = next 5m open after BOS
+//   5. SL = sweep wick extreme + 2pt buffer
+//   6. TP = dynamic, R:R >= 2
+//
+// B) IFVG Midpoint Retrace:
+//   1. Kill zone only
+//   2. Find 5M FVGs >= 7pt wide
+//   3. FVG must be "inversed" — price closes through the entire FVG
+//   4. After inversion, price retraces to IFVG midpoint -> entry
+//   5. SL = opposite extreme of FVG + 2pt buffer
+//   6. TP = dynamic, R:R >= 2
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Time helpers ──────────────────────────────────────────────────────────────
@@ -65,7 +74,6 @@ export function getSessionHL(candles5m, nowTs) {
   const todayStr = getETDateStr(nowTs)
   const todayCandles = candles5m.filter(c => getETDateStr(c.time) === todayStr)
   if (todayCandles.length <= 5) return null
-  // Exclude last 3 candles to avoid self-reference
   const sessionCandles = todayCandles.slice(0, -3)
   let high = -Infinity, low = Infinity
   for (const c of sessionCandles) {
@@ -103,7 +111,7 @@ export function detectFVGs(candles) {
   return fvgs
 }
 
-// ── IFVG entry ────────────────────────────────────────────────────────────────
+// ── IFVG entry (for Sweep+BOS 1m entry path) ─────────────────────────────────
 export function findIFVGEntry(candles, fvg, bias) {
   let retraced = false
   for (const c of candles) {
@@ -119,7 +127,7 @@ export function findIFVGEntry(candles, fvg, bias) {
   return null
 }
 
-// ── Break of Structure (O(n) pointer-based — matches backtest) ───────────────
+// ── Break of Structure ───────────────────────────────────────────────────────
 export function detectBOS(candles, swingHighs, swingLows) {
   const bos = []
   let lastHigh = null, lastLow = null, hPtr = 0, lPtr = 0
@@ -133,6 +141,44 @@ export function detectBOS(candles, swingHighs, swingLows) {
       bos.push({ type: 'bearish', price: lastLow.price,  time: curr.time })
   }
   return bos
+}
+
+// ── Detect Inversed FVGs (for IFVG Midpoint Retrace strategy) ────────────────
+export function detectIFVGs(candles, fvgs) {
+  const ifvgs = []
+  for (const fvg of fvgs) {
+    if (fvg.top - fvg.bottom < 7) continue  // min 7pt wide
+
+    for (let k = 0; k < candles.length; k++) {
+      const c = candles[k]
+      if (c.time <= fvg.time) continue
+      if (fvg.type === 'bullish' && c.close < fvg.bottom) {
+        ifvgs.push({ ...fvg, ifvgBias: 'bearish', inversionTime: c.time, inversionIndex: k })
+        break
+      }
+      if (fvg.type === 'bearish' && c.close > fvg.top) {
+        ifvgs.push({ ...fvg, ifvgBias: 'bullish', inversionTime: c.time, inversionIndex: k })
+        break
+      }
+    }
+  }
+  return ifvgs
+}
+
+// ── Find midpoint retrace entry after IFVG inversion ────────────────────────
+export function findMidRetrace(candles, ifvg) {
+  let movedAway = false
+  for (const c of candles) {
+    if (c.time <= ifvg.inversionTime) continue
+    if (ifvg.ifvgBias === 'bullish') {
+      if (!movedAway && c.close > ifvg.mid) movedAway = true
+      if (movedAway && c.low <= ifvg.mid) return c
+    } else {
+      if (!movedAway && c.close < ifvg.mid) movedAway = true
+      if (movedAway && c.high >= ifvg.mid) return c
+    }
+  }
+  return null
 }
 
 // ── Contract multipliers ──────────────────────────────────────────────────────
@@ -151,8 +197,9 @@ export function calcFuturesPnl(entryPrice, exitPrice, symbol, side) {
 }
 
 const MIN_RR = 2
+const MIN_FVG_WIDTH = 7
 
-// ── Sweep detection (checks both prev day H/L and session H/L) ──────────────
+// ── Sweep detection helper ──────────────────────────────────────────────────
 function findSweep(recent5m, candles5m, nowTs) {
   const dailyHL = buildDailyHL(candles5m)
   const pdhl    = getPrevDayHL(dailyHL, nowTs)
@@ -183,17 +230,19 @@ function findSweep(recent5m, candles5m, nowTs) {
   return { sweepBias, sweepTime, sweepWickExtreme, dailyHL, pdhl }
 }
 
-// ── Full backtest (client-side, kept for compatibility) ──────────────────────
-export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
-  const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
-  const trades     = []
+// ══════════════════════════════════════════════════════════════════════════════
+// BACKTEST: runs BOTH strategies, merges + deduplicates by time
+// ══════════════════════════════════════════════════════════════════════════════
 
-  if (!candles5m.length || !candles1m.length) return trades
+// ── Strategy A: Sweep + BOS backtest ─────────────────────────────────────────
+function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
+  const trades = []
+  if (!candles5m.length) return trades
 
   const dailyHL = buildDailyHL(candles5m)
   let lastTradeTime = 0
-  const usedSweeps     = new Set()   // prevent same sweep from generating multiple trades
-  const usedEntryTimes = new Set()   // prevent two trades at the exact same time
+  const usedSweeps     = new Set()
+  const usedEntryTimes = new Set()
 
   for (let i = 20; i < candles5m.length - 1; i++) {
     const now5m    = candles5m[i]
@@ -204,7 +253,6 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
 
     const pdhl = getPrevDayHL(dailyHL, now5m.time)
 
-    // Confluence 1: Daily H/L sweep OR session H/L sweep
     let sweepBias = null, sweepWickExtreme = null, sweepTime = null
 
     if (pdhl) {
@@ -234,11 +282,9 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
       }
     }
     if (!sweepBias) continue
-
-    // Deduplicate: skip if we already traded this exact sweep
     if (usedSweeps.has(sweepTime)) continue
 
-    // Confluence 2: BOS on 5M AFTER the sweep, same direction
+    // BOS
     const postSweep5m = recent5m.filter(c => c.time > sweepTime)
     if (postSweep5m.length < 3) continue
     const { highs: h5, lows: l5 } = detectSwings(postSweep5m, 2)
@@ -266,7 +312,6 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
       }
     }
 
-    // 5M fallback
     if (!entryCandle) {
       const bosIdx = candles5m.findIndex(c => c.time >= latestBOS.time)
       entryCandle  = bosIdx >= 0 ? candles5m[bosIdx + 1] : null
@@ -274,14 +319,13 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
       entryPrice = entryCandle.open
     }
 
-    // Prevent two trades at the exact same entry time
     if (usedEntryTimes.has(entryCandle.time)) continue
 
     // SL/TP
     let slPrice = bias === 'bullish' ? sweepWickExtreme - 2 : sweepWickExtreme + 2
     if (bias === 'bullish' && entryPrice - slPrice < 15) slPrice = entryPrice - 15
     if (bias === 'bearish' && slPrice - entryPrice < 15) slPrice = entryPrice + 15
-    const slDist  = Math.abs(entryPrice - slPrice)
+    const slDist = Math.abs(entryPrice - slPrice)
     if (slDist === 0 || slDist > 60) continue
 
     const minTPDist = slDist * MIN_RR
@@ -304,9 +348,12 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
 
     const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
     const future1m   = candles1m.slice(entryIdx1m + 1, entryIdx1m + 720)
+    // Fallback to 5m simulation if no 1m data
+    const entryIdx5m = candles5m.findIndex(c => c.time >= entryCandle.time)
+    const simCandles = future1m.length > 0 ? future1m : candles5m.slice(entryIdx5m + 1, entryIdx5m + 200)
     let outcome = null, exitPrice = null, exitTime = null
 
-    for (const fc of future1m) {
+    for (const fc of simCandles) {
       if (bias === 'bullish') {
         if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
         if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
@@ -322,7 +369,6 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
     const pnlDollars = parseFloat((pnlPoints * multiplier).toFixed(2))
 
     trades.push({
-      id:          trades.length + 1,
       time:        entryCandle.time,
       exitTime,
       bias,
@@ -336,7 +382,6 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
       signal:      entrySignal,
     })
 
-    // Mark this sweep and entry time as used
     usedSweeps.add(sweepTime)
     usedEntryTimes.add(entryCandle.time)
     lastTradeTime = now5m.time
@@ -345,12 +390,130 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
   return trades
 }
 
-// ── Signal debug info ────────────────────────────────────────────────────────
+// ── Strategy B: IFVG Midpoint Retrace backtest ──────────────────────────────
+function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
+  const trades = []
+  if (!candles5m.length) return trades
+
+  const allFVGs  = detectFVGs(candles5m)
+  const allIFVGs = detectIFVGs(candles5m, allFVGs)
+
+  let lastTradeTime    = 0
+  const usedIFVGs      = new Set()
+  const usedEntryTimes = new Set()
+
+  for (const ifvg of allIFVGs) {
+    if (!isKillZone(ifvg.inversionTime)) continue
+
+    const entryCandle = findMidRetrace(candles5m, ifvg)
+    if (!entryCandle) continue
+    if (!isKillZone(entryCandle.time)) continue
+    if (entryCandle.time - lastTradeTime < 1200) continue
+    if (usedIFVGs.has(ifvg.time)) continue
+    if (usedEntryTimes.has(entryCandle.time)) continue
+
+    const bias       = ifvg.ifvgBias
+    const entryPrice = ifvg.mid
+
+    const slPrice = bias === 'bullish' ? ifvg.bottom - 2 : ifvg.top + 2
+    const slDist  = Math.abs(entryPrice - slPrice)
+    if (slDist < 3 || slDist > 60) continue
+
+    const minTPDist = slDist * MIN_RR
+    const maxTPDist = minTPDist + 30
+
+    const entryIdx  = candles5m.findIndex(c => c.time >= entryCandle.time)
+    const recent5m  = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
+    const { highs, lows } = detectSwings(recent5m, 3)
+
+    let tpPrice
+    if (bias === 'bullish') {
+      const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+      tpPrice = targets[0]?.price ?? entryPrice + minTPDist
+    } else {
+      const targets = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
+      tpPrice = targets[0]?.price ?? entryPrice - minTPDist
+    }
+
+    if (bias === 'bullish' && tpPrice <= entryPrice) continue
+    if (bias === 'bearish' && tpPrice >= entryPrice) continue
+
+    const tpDist = Math.abs(tpPrice - entryPrice)
+    if (tpDist / slDist < MIN_RR) continue
+
+    const entryIdx1m = candles1m?.length ? candles1m.findIndex(c => c.time >= entryCandle.time) : -1
+    const simCandles = entryIdx1m >= 0 && entryIdx1m < candles1m.length - 1
+      ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 720)
+      : candles5m.slice(entryIdx + 1, entryIdx + 200)
+    let outcome = null, exitPrice = null, exitTime = null
+
+    for (const fc of simCandles) {
+      if (bias === 'bullish') {
+        if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
+        if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
+      } else {
+        if (fc.high >= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
+        if (fc.low  <= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
+      }
+    }
+
+    if (!outcome) continue
+
+    const pnlPoints  = outcome === 'win' ? tpDist : -slDist
+    const pnlDollars = parseFloat((pnlPoints * multiplier).toFixed(2))
+
+    trades.push({
+      time:        entryCandle.time,
+      exitTime,
+      bias,
+      entryPrice:  parseFloat(entryPrice.toFixed(4)),
+      stopPrice:   parseFloat(slPrice.toFixed(4)),
+      targetPrice: parseFloat(tpPrice.toFixed(4)),
+      exitPrice:   parseFloat(exitPrice.toFixed(4)),
+      outcome,
+      pnlDollars,
+      rr:          parseFloat((tpDist / slDist).toFixed(2)),
+      signal:      'IFVG-Mid-Retrace',
+    })
+
+    usedIFVGs.add(ifvg.time)
+    usedEntryTimes.add(entryCandle.time)
+    lastTradeTime = entryCandle.time
+  }
+
+  return trades
+}
+
+// ── Combined backtest: merge both strategies, dedup by entry time ────────────
+export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
+  const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
+
+  // Run both strategies independently
+  const sweepTrades = runBacktestSweepBOS(candles5m, candles1m || [], symbol, multiplier)
+  const ifvgTrades  = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
+
+  // Merge and sort by entry time
+  const all = [...sweepTrades, ...ifvgTrades].sort((a, b) => a.time - b.time)
+
+  // Dedup: no two trades within 20 min of each other
+  const final = []
+  let lastTime = 0
+  for (const t of all) {
+    if (t.time - lastTime < 1200) continue
+    t.id = final.length + 1
+    final.push(t)
+    lastTime = t.time
+  }
+
+  return final
+}
+
+// ── Signal debug info (checks both strategies) ──────────────────────────────
 export function getSignalDebugInfo(candles5m, candles1m) {
   if (!candles5m?.length)
     return { signal: null, step: 'no_data', label: 'Awaiting MTF candle data\u2026' }
 
-  const recent5m = candles5m.slice(-30)
+  const recent5m = candles5m.slice(-60)
   const nowTs    = recent5m[recent5m.length - 1]?.time
   if (!nowTs)
     return { signal: null, step: 'no_ts', label: 'No timestamp on candles' }
@@ -365,74 +528,117 @@ export function getSignalDebugInfo(candles5m, candles1m) {
     return { signal: null, step: 'kill_zone', label: `Outside kill zone \u2014 ${nextZone}` }
   }
 
-  const { sweepBias, sweepTime, dailyHL, pdhl } = findSweep(recent5m, candles5m, nowTs)
-
-  if (!pdhl && !getSessionHL(candles5m, nowTs))
-    return { signal: null, step: 'prev_day', label: 'No previous day or session H/L available' }
-
-  if (!sweepBias) {
-    const levels = pdhl
-      ? `prev day H: ${pdhl.high.toFixed(2)} / L: ${pdhl.low.toFixed(2)}`
-      : 'session H/L'
-    return { signal: null, step: 'sweep', label: `No sweep \u2014 watching ${levels}` }
-  }
-
-  const postSweep5m = recent5m.filter(c => c.time > sweepTime)
-  if (postSweep5m.length < 3)
-    return { signal: null, step: 'bos_data', label: `${sweepBias} sweep found \u2014 waiting for more 5m candles to detect BOS` }
-
-  const { highs: h5, lows: l5 } = detectSwings(postSweep5m, 2)
-  const bosList   = detectBOS(postSweep5m, h5, l5).filter(b => b.type === sweepBias)
-  if (!bosList.length)
-    return { signal: null, step: 'bos', label: `${sweepBias} sweep found \u2014 waiting for 5m BOS confirmation` }
-
-  const latestBOS = bosList[bosList.length - 1]
-
-  // Check 1m IFVG entry
-  if (candles1m?.length) {
-    const m1After = candles1m.filter(c => c.time >= latestBOS.time)
-    if (m1After.length < 5)
-      return { signal: null, step: 'fvg_data', label: 'BOS confirmed \u2014 waiting for 1m candles after BOS' }
-
-    const fvgs1m = detectFVGs(m1After).filter(f => f.type === sweepBias)
-    if (fvgs1m.length) {
-      const fvg1m = fvgs1m[fvgs1m.length - 1]
-      if (fvg1m.top - fvg1m.bottom < 3)
-        return { signal: null, step: 'fvg_width', label: `FVG found but too narrow: ${(fvg1m.top - fvg1m.bottom).toFixed(1)}pt (need \u22653pt)` }
-
-      const m1PostFVG   = m1After.filter(c => c.time > fvg1m.time)
-      const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, sweepBias)
+  // ── Check Strategy B: IFVG Midpoint Retrace ────────────────────────────────
+  const fvgs = detectFVGs(recent5m).filter(f => f.top - f.bottom >= MIN_FVG_WIDTH)
+  if (fvgs.length) {
+    const ifvgs = detectIFVGs(recent5m, fvgs)
+    if (ifvgs.length) {
+      const latestIFVG  = ifvgs[ifvgs.length - 1]
+      const entryCandle = findMidRetrace(recent5m, latestIFVG)
       if (entryCandle) {
-        const sig = sweepBias === 'bullish' ? 'LONG' : 'SHORT'
-        return { signal: sig, step: 'signal', label: `🟢 ${sig} signal active (1m IFVG entry)` }
+        const sig = latestIFVG.ifvgBias === 'bullish' ? 'LONG' : 'SHORT'
+        return { signal: sig, step: 'signal', label: `\ud83d\udfe2 ${sig} signal \u2014 IFVG mid retrace at ${latestIFVG.mid.toFixed(2)}` }
       }
-
-      return { signal: null, step: 'ifvg', label: `${sweepBias} FVG at ${fvg1m.bottom.toFixed(2)}–${fvg1m.top.toFixed(2)} — awaiting IFVG retrace entry` }
     }
   }
 
-  // 5M fallback: BOS confirmed, no 1m IFVG needed
-  const sig = sweepBias === 'bullish' ? 'LONG' : 'SHORT'
-  return { signal: sig, step: 'signal', label: `🟢 ${sig} signal active (5m BOS fallback)` }
+  // ── Check Strategy A: Sweep + BOS ──────────────────────────────────────────
+  const { sweepBias, sweepTime, pdhl } = findSweep(recent5m.slice(-30), candles5m, nowTs)
+
+  if (!pdhl && !getSessionHL(candles5m, nowTs)) {
+    // No levels for sweep, check IFVG status
+    if (fvgs.length) {
+      const ifvgs = detectIFVGs(recent5m, fvgs)
+      if (ifvgs.length) {
+        const latestIFVG = ifvgs[ifvgs.length - 1]
+        const dir = latestIFVG.ifvgBias === 'bullish' ? 'LONG' : 'SHORT'
+        return { signal: null, step: 'retrace', label: `${dir} IFVG \u2014 awaiting midpoint retrace (${latestIFVG.mid.toFixed(2)})` }
+      }
+      return { signal: null, step: 'inversion', label: `${fvgs.length} FVG(s) found \u2014 none inversed yet` }
+    }
+    return { signal: null, step: 'prev_day', label: 'No sweep levels or IFVG setups available' }
+  }
+
+  if (sweepBias) {
+    const postSweep5m = recent5m.slice(-30).filter(c => c.time > sweepTime)
+    if (postSweep5m.length >= 3) {
+      const { highs: h5, lows: l5 } = detectSwings(postSweep5m, 2)
+      const bosList = detectBOS(postSweep5m, h5, l5).filter(b => b.type === sweepBias)
+      if (bosList.length) {
+        const latestBOS = bosList[bosList.length - 1]
+
+        // Try 1m IFVG entry
+        if (candles1m?.length) {
+          const m1After = candles1m.filter(c => c.time >= latestBOS.time)
+          if (m1After.length >= 5) {
+            const fvgs1m = detectFVGs(m1After).filter(f => f.type === sweepBias && f.top - f.bottom >= 3)
+            if (fvgs1m.length) {
+              const fvg1m     = fvgs1m[fvgs1m.length - 1]
+              const m1PostFVG = m1After.filter(c => c.time > fvg1m.time)
+              const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, sweepBias)
+              if (entryCandle) {
+                const sig = sweepBias === 'bullish' ? 'LONG' : 'SHORT'
+                return { signal: sig, step: 'signal', label: `\ud83d\udfe2 ${sig} signal (Sweep+BOS+1m IFVG)` }
+              }
+            }
+          }
+        }
+
+        // 5M fallback
+        const sig = sweepBias === 'bullish' ? 'LONG' : 'SHORT'
+        return { signal: sig, step: 'signal', label: `\ud83d\udfe2 ${sig} signal (Sweep+BOS fallback)` }
+      }
+      return { signal: null, step: 'bos', label: `${sweepBias} sweep found \u2014 waiting for 5m BOS confirmation` }
+    }
+    return { signal: null, step: 'bos_data', label: `${sweepBias} sweep found \u2014 waiting for more candles` }
+  }
+
+  // Neither strategy has a signal — show what we're watching
+  if (fvgs.length) {
+    const ifvgs = detectIFVGs(recent5m, fvgs)
+    if (ifvgs.length) {
+      const latestIFVG = ifvgs[ifvgs.length - 1]
+      const dir = latestIFVG.ifvgBias === 'bullish' ? 'LONG' : 'SHORT'
+      return { signal: null, step: 'retrace', label: `No sweep | ${dir} IFVG awaiting mid retrace (${latestIFVG.mid.toFixed(2)})` }
+    }
+    return { signal: null, step: 'inversion', label: `No sweep | ${fvgs.length} FVG(s) \u2014 none inversed` }
+  }
+
+  const levels = pdhl
+    ? `prev day H: ${pdhl.high.toFixed(2)} / L: ${pdhl.low.toFixed(2)}`
+    : 'session H/L'
+  return { signal: null, step: 'sweep', label: `No sweep (watching ${levels}) | No IFVG setups` }
 }
 
-// ── Live signal (returns 'LONG', 'SHORT', or null) ──────────────────────────
+// ── Live signal: returns 'LONG', 'SHORT', or null ───────────────────────────
+// Checks BOTH strategies — first signal wins
 export function getLiveSignal(candles5m, candles1m) {
   if (!candles5m?.length) return null
 
-  const recent5m = candles5m.slice(-30)
+  const recent5m = candles5m.slice(-60)
   const nowTs    = recent5m[recent5m.length - 1]?.time
   if (!nowTs) return null
-
-  // Kill zone check
   if (!isKillZone(nowTs)) return null
 
-  // Sweep detection (prev day H/L + session H/L fallback)
-  const { sweepBias, sweepTime } = findSweep(recent5m, candles5m, nowTs)
+  // ── Strategy B: IFVG Midpoint Retrace ──────────────────────────────────────
+  const fvgs = detectFVGs(recent5m).filter(f => f.top - f.bottom >= MIN_FVG_WIDTH)
+  if (fvgs.length) {
+    const ifvgs = detectIFVGs(recent5m, fvgs)
+    if (ifvgs.length) {
+      const latestIFVG  = ifvgs[ifvgs.length - 1]
+      const entryCandle = findMidRetrace(recent5m, latestIFVG)
+      if (entryCandle) {
+        return latestIFVG.ifvgBias === 'bullish' ? 'LONG' : 'SHORT'
+      }
+    }
+  }
+
+  // ── Strategy A: Sweep + BOS ────────────────────────────────────────────────
+  const recent30 = recent5m.slice(-30)
+  const { sweepBias, sweepTime } = findSweep(recent30, candles5m, nowTs)
   if (!sweepBias) return null
 
-  // BOS on 5M AFTER the sweep, same direction (min 3 candles)
-  const postSweep5m = recent5m.filter(c => c.time > sweepTime)
+  const postSweep5m = recent30.filter(c => c.time > sweepTime)
   if (postSweep5m.length < 3) return null
   const { highs: h5, lows: l5 } = detectSwings(postSweep5m, 2)
   const bosList = detectBOS(postSweep5m, h5, l5).filter(b => b.type === sweepBias)
