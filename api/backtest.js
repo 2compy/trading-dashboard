@@ -163,16 +163,10 @@ function getTPSL(symbol, bias, entryPrice, sweepPrice, pdhl, recent5m) {
     }
   }
   if (symbol === 'MGC1!') {
-    // TP = nearest prev swing high/low beyond entry, SL = half the distance (2:1)
-    const { highs, lows } = detectSwings(recent5m, 3)
-    const tpPrice = bias === 'bullish'
-      ? highs.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)[0]?.price
-      : lows.filter(l => l.price < entryPrice).sort((a, b) => b.price - a.price)[0]?.price
-    if (!tpPrice) return null
-    const tpDist = Math.abs(tpPrice - entryPrice)
+    // Fixed 20pt SL / 30pt TP
     return {
-      slPrice: bias === 'bullish' ? entryPrice - tpDist / 2 : entryPrice + tpDist / 2,
-      tpPrice,
+      slPrice: bias === 'bullish' ? entryPrice - 20 : entryPrice + 20,
+      tpPrice: bias === 'bullish' ? entryPrice + 30 : entryPrice - 30,
     }
   }
   // MES1! / Sl1! — daily H/L based
