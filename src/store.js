@@ -5,7 +5,6 @@ export const FUTURES = [
   { symbol: 'MES1!', name: 'Micro E-mini S&P 500', base: 5400 },
   { symbol: 'MNQ1!', name: 'Micro E-mini Nasdaq',  base: 18800 },
   { symbol: 'MGC1!', name: 'Micro Gold',            base: 4702.7 },
-  { symbol: 'Sl1!',  name: 'Mini Silver',           base: 33.5 },
 ]
 
 export const TIMEFRAMES = ['1m', '5m', '15m', '1h', '1d']

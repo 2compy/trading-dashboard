@@ -8,12 +8,11 @@ const SYMBOL_MAP = {
   'MES1!': 'MES=F',
   'MNQ1!': 'MNQ=F',
   'MGC1!': 'MGC=F',
-  'Sl1!':  'SIL=F',
 }
 
-const CONTRACT_MULTIPLIER = { 'MES1!': 5, 'MNQ1!': 2, 'MGC1!': 10, 'Sl1!': 5 }
+const CONTRACT_MULTIPLIER = { 'MES1!': 5, 'MNQ1!': 2, 'MGC1!': 10 }
 // Units (contracts) per trade per symbol
-const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2, 'Sl1!': 1 }
+const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
 const MIN_RR = 2
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
@@ -249,7 +248,7 @@ function findIFVGEntry(candles, fvg, bias) {
 }
 
 // ── Fixed SL per symbol (null = use sweep wick) ─────────────────────────────
-const FIXED_SL = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
+const FIXED_SL = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20 }
 // ── Min R:R per symbol ──────────────────────────────────────────────────────
 const SYMBOL_RR = { 'MES1!': 3, 'MNQ1!': 3, 'MGC1!': 3 }
 // ── Min FVG width for IFVG detection, per symbol ────────────────────────────
@@ -258,7 +257,6 @@ const MIN_FVG_WIDTH = {
   'MES1!': 7,
   'MNQ1!': 20,
   'MGC1!': 3,
-  'Sl1!':  0.10,
 }
 const DEFAULT_FVG_WIDTH = 7
 // ── SL distance bounds per symbol ───────────────────────────────────────────
@@ -266,7 +264,6 @@ const SL_BOUNDS = {
   'MES1!': { min: 3, max: 60 },
   'MNQ1!': { min: 10, max: 100 },
   'MGC1!': { min: 2, max: 40 },
-  'Sl1!':  { min: 0.03, max: 1.0 },
 }
 const DEFAULT_SL_BOUNDS = { min: 3, max: 60 }
 

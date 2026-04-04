@@ -5,7 +5,6 @@ const SYMBOL_MAP = {
   'MES1!': 'MES=F',
   'MNQ1!': 'MNQ=F',
   'MGC1!': 'MGC=F',
-  'Sl1!': 'SIL=F',
 }
 
 const RANGE_MAP = {

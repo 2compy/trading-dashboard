@@ -1,10 +1,10 @@
 import { FUTURES } from '../store'
 import { CONTRACT_MULTIPLIER } from '../utils/strategy'
 
-const SYMBOL_RR = { 'MES1!': 3, 'MNQ1!': 3, 'MGC1!': 3, 'Sl1!': 2 }
-const UNITS     = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2, 'Sl1!': 1 }
-const FIXED_SL  = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
-const FVG_WIDTH = { 'MES1!': 7, 'MNQ1!': 20, 'MGC1!': 3, 'Sl1!': 0.10 }
+const SYMBOL_RR = { 'MES1!': 3, 'MNQ1!': 3, 'MGC1!': 3 }
+const UNITS     = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
+const FIXED_SL  = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20 }
+const FVG_WIDTH = { 'MES1!': 7, 'MNQ1!': 20, 'MGC1!': 3 }
 
 // ── SHORT strategies per symbol ──────────────────────────────────────────────
 
@@ -62,24 +62,6 @@ const SHORT_STRATEGIES = {
     },
     signals: ['HTFBias+4h/1hClean+5mFVG+MidRetrace', 'IFVG-Mid-Retrace'],
   },
-
-  'Sl1!': {
-    name: 'Sweep + BOS + IFVG Mid Retrace',
-    rules: [
-      'Kill Zones: London 3\u20135am ET, NY 8:30am\u201312pm ET, NY PM 1:30\u20133pm ET',
-      'Strategy A \u2014 Sweep + BOS: Prev day H/L or session H/L bearish sweep, then 5M BOS bearish confirmation. Entry on 1M FVG + IFVG retrace, or fallback to next 5M open after BOS.',
-      'Strategy B \u2014 IFVG Mid Retrace: Find 5M FVGs \u2265 0.10pt wide that get inversed. After inversion, wait for midpoint retrace \u2192 SHORT entry.',
-      'Fixed SL of 15pt. Either strategy can trigger.',
-    ],
-    risk: {
-      sl: 'Fixed 15pt ($75 risk per contract)',
-      tp: 'Nearest swing low \u2265 SL \u00d7 2 distance',
-      rr: '2:1',
-      units: '1 contract',
-      cooldown: '10 min between trades, 20 min same-bias dedup',
-    },
-    signals: ['Sweep+BOS', 'Sweep+BOS+1mIFVG', 'IFVG-Mid-Retrace'],
-  },
 }
 
 // ── LONG strategies per symbol (placeholder \u2014 to be filled in) ─────────────────
@@ -88,7 +70,6 @@ const LONG_STRATEGIES = {
   'MES1!': null,
   'MNQ1!': null,
   'MGC1!': null,
-  'Sl1!':  null,
 }
 
 // ── Components ───────────────────────────────────────────────────────────────
