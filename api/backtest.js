@@ -22,6 +22,24 @@ async function fetchTF(ticker, interval, range) {
   } catch { return [] }
 }
 
+// Fetch 6 months of 5m data in 3 chunks (Yahoo Finance max is 60d per request)
+async function fetch5mChunked(ticker) {
+  const now      = Math.floor(Date.now() / 1000)
+  const chunkSec = 60 * 24 * 60 * 60 // 60 days
+  const requests = Array.from({ length: 3 }, (_, i) => {
+    const period2 = now - i * chunkSec
+    const period1 = period2 - chunkSec
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=5m&period1=${period1}&period2=${period2}&includePrePost=false`
+    return fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
+      .then(r => r.json()).then(d => parseCandles(d)).catch(() => [])
+  })
+  const results = await Promise.all(requests)
+  const seen = new Set()
+  return results.flat()
+    .filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true })
+    .sort((a, b) => a.time - b.time)
+}
+
 // Fetch 1 week of 1m data (single call — Yahoo Finance max is 7 days for 1m)
 async function fetch1mRecent(ticker) {
   const now     = Math.floor(Date.now() / 1000)
@@ -303,9 +321,9 @@ export default async function handler(req, res) {
   if (!ticker) return res.status(400).json({ error: `Unknown symbol: ${symbol}` })
 
   try {
-    // 2 calls: 5m (60d) + 1m (7d)
+    // 4 calls: 5m (3x60d chunks = 6mo) + 1m (7d)
     const [candles5m, candles1m] = await Promise.all([
-      fetchTF(ticker, '5m', '60d'),
+      fetch5mChunked(ticker),
       fetch1mRecent(ticker),
     ])
 
