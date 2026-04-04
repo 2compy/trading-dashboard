@@ -235,6 +235,7 @@ function runBacktest(candles5m, candles1m, symbol) {
     const fvgs1m = detectFVGs(m1After).filter(f => f.type === bias)
     if (!fvgs1m.length) continue
     const fvg1m = fvgs1m[fvgs1m.length - 1]
+    if (fvg1m.top - fvg1m.bottom < 10) continue  // must be at least 10pts wide
 
     const m1PostFVG   = m1After.filter(c => c.time > fvg1m.time)
     const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, bias)
