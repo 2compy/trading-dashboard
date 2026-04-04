@@ -342,6 +342,7 @@ function runBacktestMGC(candles5m) {
     // Both timeframes must agree — no counter-trend trades ever
     if (bias1h !== trend4h) continue
     const bias = trend4h
+    if (bias === 'bullish') continue
 
     // ── TP at nearest 1h swing H/L beyond current price ──────────────────────
     let tpPrice = null
@@ -546,6 +547,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     const latestBOS = bosList[bosList.length - 1]
 
     const bias = sweepBias
+    if (bias === 'bullish') continue
 
     // Entry: try 1M FVG + IFVG, fallback to next 5m candle after BOS
     let entryCandle = null, entryPrice = null, entrySignal = 'Sweep+BOS'
@@ -663,6 +665,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     if (usedEntryTimes.has(entryCandle.time)) continue
 
     const bias       = ifvg.ifvgBias
+    if (bias === 'bullish') continue
     const entryPrice = ifvg.mid
 
     // SL: fixed per symbol, or FVG-based for ES

@@ -310,6 +310,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     const latestBOS = bosList[bosList.length - 1]
 
     const bias = sweepBias
+    if (bias === 'bullish') continue
 
     // Entry: try 1M FVG + IFVG, fallback to next 5m candle after BOS
     let entryCandle = null, entryPrice = null, entrySignal = 'Sweep+BOS'
@@ -440,6 +441,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
     if (usedEntryTimes.has(entryCandle.time)) continue
 
     const bias       = ifvg.ifvgBias
+    if (bias === 'bullish') continue
     const entryPrice = ifvg.mid
 
     let slDist, slPrice
@@ -583,8 +585,10 @@ export function getSignalDebugInfo(candles5m, candles1m, symbol = 'MES1!') {
       const latestIFVG  = ifvgs[ifvgs.length - 1]
       const entryCandle = findMidRetrace(recent5m, latestIFVG)
       if (entryCandle) {
-        const sig = latestIFVG.ifvgBias === 'bullish' ? 'LONG' : 'SHORT'
-        return { signal: sig, step: 'signal', label: `\ud83d\udfe2 ${sig} signal \u2014 IFVG mid retrace at ${latestIFVG.mid.toFixed(2)}` }
+        if (latestIFVG.ifvgBias === 'bullish') {
+          return { signal: null, step: 'signal', label: `Shorts only — skipping LONG IFVG mid retrace at ${latestIFVG.mid.toFixed(2)}` }
+        }
+        return { signal: 'SHORT', step: 'signal', label: `\ud83d\udfe2 SHORT signal \u2014 IFVG mid retrace at ${latestIFVG.mid.toFixed(2)}` }
       }
     }
   }
@@ -624,16 +628,20 @@ export function getSignalDebugInfo(candles5m, candles1m, symbol = 'MES1!') {
               const m1PostFVG = m1After.filter(c => c.time > fvg1m.time)
               const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, sweepBias)
               if (entryCandle) {
-                const sig = sweepBias === 'bullish' ? 'LONG' : 'SHORT'
-                return { signal: sig, step: 'signal', label: `\ud83d\udfe2 ${sig} signal (Sweep+BOS+1m IFVG)` }
+                if (sweepBias === 'bullish') {
+                  return { signal: null, step: 'signal', label: `Shorts only — skipping LONG signal (Sweep+BOS+1m IFVG)` }
+                }
+                return { signal: 'SHORT', step: 'signal', label: `\ud83d\udfe2 SHORT signal (Sweep+BOS+1m IFVG)` }
               }
             }
           }
         }
 
         // 5M fallback
-        const sig = sweepBias === 'bullish' ? 'LONG' : 'SHORT'
-        return { signal: sig, step: 'signal', label: `\ud83d\udfe2 ${sig} signal (Sweep+BOS fallback)` }
+        if (sweepBias === 'bullish') {
+          return { signal: null, step: 'signal', label: `Shorts only — skipping LONG signal (Sweep+BOS fallback)` }
+        }
+        return { signal: 'SHORT', step: 'signal', label: `\ud83d\udfe2 SHORT signal (Sweep+BOS fallback)` }
       }
       return { signal: null, step: 'bos', label: `${sweepBias} sweep found \u2014 waiting for 5m BOS confirmation` }
     }
@@ -676,7 +684,8 @@ export function getLiveSignal(candles5m, candles1m, symbol = 'MES1!') {
       const latestIFVG  = ifvgs[ifvgs.length - 1]
       const entryCandle = findMidRetrace(recent5m, latestIFVG)
       if (entryCandle) {
-        return latestIFVG.ifvgBias === 'bullish' ? 'LONG' : 'SHORT'
+        if (latestIFVG.ifvgBias === 'bullish') return null
+        return 'SHORT'
       }
     }
   }
@@ -702,11 +711,15 @@ export function getLiveSignal(candles5m, candles1m, symbol = 'MES1!') {
         const fvg1m     = fvgs1m[fvgs1m.length - 1]
         const m1PostFVG = m1After.filter(c => c.time > fvg1m.time)
         const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, sweepBias)
-        if (entryCandle) return sweepBias === 'bullish' ? 'LONG' : 'SHORT'
+        if (entryCandle) {
+          if (sweepBias === 'bullish') return null
+          return 'SHORT'
+        }
       }
     }
   }
 
   // 5M fallback: BOS confirmed = enter
-  return sweepBias === 'bullish' ? 'LONG' : 'SHORT'
+  if (sweepBias === 'bullish') return null
+  return 'SHORT'
 }
