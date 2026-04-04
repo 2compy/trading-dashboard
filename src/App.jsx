@@ -176,4 +176,7 @@ export default function App() {
           {tab === 'backtest'  && <Backtest onBack={() => setTab('charts')} />}
           {tab === 'strategy' && <Strategy />}
         </ErrorBoundary>
-      </ma
+      </main>
+    </div>
+  )
+}
