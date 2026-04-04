@@ -223,7 +223,7 @@ function runBacktestMGC(candles5m) {
     const now5m    = candles5m[i]
     const recent5m = candles5m.slice(Math.max(0, i - 36), i + 1)  // ~3hrs of 5m
 
-    if (!isKillZone(now5m.time)) continue
+    // MGC1! runs 24/7 — no kill zone filter
     if (now5m.time - lastTradeTime < 1200) continue
 
     // ── HTF bias: last BOS on 1h ─────────────────────────────────────────────
