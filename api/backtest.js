@@ -202,17 +202,16 @@ function getTPSL(bias, entryPrice, sweepWickExtreme, recent5m) {
   if (bias === 'bullish' && entryPrice - slPrice < 15) slPrice = entryPrice - 15
   if (bias === 'bearish' && slPrice - entryPrice < 15) slPrice = entryPrice + 15
   const slDist = Math.abs(entryPrice - slPrice)
-  if (slDist > 60) return null
+  if (slDist > 30) return null
 
-  const minTPDist = slDist * MIN_RR
   const { highs, lows } = detectSwings(recent5m, 3)
   let tpPrice
   if (bias === 'bullish') {
-    const c = highs.filter(h => h.price >= entryPrice + minTPDist).sort((a, b) => a.price - b.price)
-    tpPrice = c[0]?.price ?? entryPrice + minTPDist
+    const c = highs.filter(h => h.price > entryPrice + 50 && h.price <= entryPrice + 70).sort((a, b) => a.price - b.price)
+    tpPrice = c[0]?.price ?? entryPrice + 60
   } else {
-    const c = lows.filter(l => l.price <= entryPrice - minTPDist).sort((a, b) => b.price - a.price)
-    tpPrice = c[0]?.price ?? entryPrice - minTPDist
+    const c = lows.filter(l => l.price < entryPrice - 50 && l.price >= entryPrice - 70).sort((a, b) => b.price - a.price)
+    tpPrice = c[0]?.price ?? entryPrice - 60
   }
   return { slPrice, tpPrice }
 }
