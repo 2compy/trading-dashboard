@@ -41,7 +41,7 @@ export default function App() {
 
   useEffect(() => {
     if (!USE_LIVE) return
-    pollQuotes()
+    pollQuotes(true) // force fetch on load so last known prices always show
     const interval = setInterval(pollQuotes, 2000)
     return () => clearInterval(interval)
   }, [])
@@ -126,7 +126,7 @@ export default function App() {
 
       {!marketOpen && (
         <div style={{ background: '#1c1c1c', color: '#6b7280', padding: '5px 20px', fontSize: 12, textAlign: 'center', borderBottom: '1px solid #1f2937' }}>
-          Markets closed — CME futures reopen Sunday 6:00 PM ET
+          Markets closed — closed Fri 16:00 ET through Sun 18:00 ET
         </div>
       )}
 

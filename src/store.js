@@ -11,25 +11,19 @@ export const FUTURES = [
 
 export const TIMEFRAMES = ['1m', '5m', '15m', '1h', '1d']
 
-// CME futures: open Sun 6pm ET → Fri 5pm ET, with 15-min break 4:15-4:30pm ET daily
+// Futures: 24/7 weekdays, closes Friday 16:00 ET, reopens Sunday 18:00 ET
 export function isMarketOpen() {
   const now = new Date()
-  // Convert to ET (UTC-5 standard, UTC-4 daylight)
   const etOffset = isDST(now) ? -4 : -5
   const et = new Date(now.getTime() + etOffset * 60 * 60 * 1000)
-  const day  = et.getUTCDay()  // 0=Sun, 1=Mon ... 6=Sat
+  const day  = et.getUTCDay()
   const hour = et.getUTCHours()
   const min  = et.getUTCMinutes()
   const timeInMins = hour * 60 + min
 
-  // Saturday = always closed
-  if (day === 6) return false
-  // Sunday: open from 6:00 PM ET (18:00)
-  if (day === 0) return timeInMins >= 18 * 60
-  // Friday: close at 5:00 PM ET (17:00)
-  if (day === 5) return timeInMins < 17 * 60
-  // Mon-Thu: closed during maintenance window 4:15–4:30 PM ET
-  if (timeInMins >= 16 * 60 + 15 && timeInMins < 16 * 60 + 30) return false
+  if (day === 6) return false                              // Saturday: always closed
+  if (day === 5 && timeInMins >= 16 * 60) return false    // Friday at/after 16:00: closed
+  if (day === 0 && timeInMins < 18 * 60) return false     // Sunday before 18:00: closed
   return true
 }
 
@@ -108,10 +102,11 @@ export const useStore = create((set, get) => ({
     }
   },
 
-  pollQuotes: async () => {
+  pollQuotes: async (forceUpdate = false) => {
     if (!USE_LIVE) return
     set({ marketOpen: isMarketOpen() })
-    if (!isMarketOpen()) return
+    // Always fetch on forceUpdate (initial load), skip interval polls when closed
+    if (!forceUpdate && !isMarketOpen()) return
     try {
       const res = await fetch('/api/quotes')
       const quotes = await res.json()
