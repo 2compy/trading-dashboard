@@ -274,13 +274,13 @@ function runBacktestMGC(candles5m) {
     if (!entryCandle) continue
     const entryPrice = entryCandle.open
 
-    // ── SL: fixed 200 points (minimum per strategy rules) ────────────────────
-    const slPrice = bias === 'bullish' ? entryPrice - 200 : entryPrice + 200
+    // ── SL: $200 risk per contract. MGC multiplier = 10, so 200/10 = 20 points
+    const slPrice = bias === 'bullish' ? entryPrice - 20 : entryPrice + 20
 
     if (bias === 'bullish' && tpPrice <= entryPrice) continue
     if (bias === 'bearish' && tpPrice >= entryPrice) continue
 
-    const slDist = 200
+    const slDist = 20
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (tpDist / slDist < MIN_RR) continue
 
