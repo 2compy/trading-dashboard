@@ -1,12 +1,10 @@
 import { create } from 'zustand'
 
 export const FUTURES = [
-  { symbol: 'ES', name: 'S&P 500 Futures', base: 5400 },
-  { symbol: 'NQ', name: 'Nasdaq Futures',  base: 18800 },
-  { symbol: 'CL', name: 'Crude Oil',       base: 71.5 },
-  { symbol: 'GC', name: 'Gold Futures',    base: 4702.7 },
-  { symbol: 'ZB', name: '30Y T-Bond',      base: 115.2 },
-  { symbol: 'SI', name: 'Silver Futures',  base: 33.5 },
+  { symbol: 'MES1!', name: 'Micro E-mini S&P 500', base: 5400 },
+  { symbol: 'MNQ1!', name: 'Micro E-mini Nasdaq',  base: 18800 },
+  { symbol: 'MGC1!', name: 'Micro Gold',            base: 4702.7 },
+  { symbol: 'MSL1!', name: 'Micro Silver',          base: 33.5 },
 ]
 
 export const TIMEFRAMES = ['1m', '5m', '15m', '1h', '1d']

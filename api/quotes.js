@@ -1,12 +1,10 @@
 // Fetches live quotes for all futures from Yahoo Finance
 
 const SYMBOL_MAP = {
-  ES: 'ES=F',
-  NQ: 'NQ=F',
-  CL: 'CL=F',
-  GC: 'GC=F',
-  ZB: 'ZB=F',
-  SI: 'SI=F',
+  'MES1!': 'MES=F',
+  'MNQ1!': 'MNQ=F',
+  'MGC1!': 'MGC=F',
+  'MSL1!': 'SIL=F',
 }
 
 export default async function handler(req, res) {
