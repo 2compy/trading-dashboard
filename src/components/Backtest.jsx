@@ -77,7 +77,7 @@ export default function Backtest({ onBack }) {
 
         <div style={{ marginLeft: 'auto' }}>
           <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>
-            Data: 1H (2y) · 5M (60d) · 1M (7d) · SL $200 · TP $300 · 1 unit
+            Data: 1H (1y) · 5M (60d) · 1M (7d) · SL $200 · TP $300 · 1 unit
           </div>
           <button
             onClick={runTest}
