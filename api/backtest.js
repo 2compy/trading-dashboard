@@ -22,22 +22,6 @@ async function fetchTF(ticker, interval, range) {
   } catch { return [] }
 }
 
-async function fetch1mChunked(ticker, chunks = 4) {
-  const now      = Math.floor(Date.now() / 1000)
-  const chunkSec = 7 * 24 * 60 * 60
-  const requests = Array.from({ length: chunks }, (_, i) => {
-    const period2 = now - i * chunkSec
-    const period1 = period2 - chunkSec
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1m&period1=${period1}&period2=${period2}&includePrePost=false`
-    return fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
-      .then(r => r.json()).then(d => parseCandles(d)).catch(() => [])
-  })
-  const results = await Promise.all(requests)
-  const seen = new Set()
-  return results.flat()
-    .filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true })
-    .sort((a, b) => a.time - b.time)
-}
 
 function parseCandles(data) {
   const result = data?.chart?.result?.[0]
@@ -150,12 +134,12 @@ function bsFloor(candles, t) {
   return idx
 }
 
-// ── Main backtest engine ──────────────────────────────────────────────────────
-function runBacktest(candles1h, candles5m, candles1m, symbol) {
+// ── Main backtest engine (runs entirely on 5M — no 1M fetch needed) ───────────
+function runBacktest(candles1h, candles5m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
   const trades     = []
 
-  if (!candles1h.length || !candles5m.length || !candles1m.length) return trades
+  if (!candles1h.length || !candles5m.length) return trades
 
   let lastTradeTime = 0
 
@@ -197,18 +181,14 @@ function runBacktest(candles1h, candles5m, candles1m, symbol) {
     if (!fvgs5m.length) continue
     const lastFVG5m = fvgs5m[fvgs5m.length - 1]
 
-    // Step 5: IFVG on 1M
-    const m1Start = bsFloor(candles1m, lastFVG5m.time) + 1
-    const m1End   = bsFloor(candles1m, now5m.time)
-    if (m1End - m1Start < 5) continue
-    const m1Slice = candles1m.slice(m1Start, m1End + 1)
-
-    const raw1m  = detectFVGs(m1Slice)
-    const ifvgs  = applyIFVG(m1Slice, raw1m).filter(f => f.inversed && f.effectiveType === bias)
+    // Step 5: IFVG on 5M (after the FVG)
+    const postFVG5m = candles5m.slice(sweepCandleIdx, i + 1).filter(c => c.time >= lastFVG5m.time)
+    if (postFVG5m.length < 3) continue
+    const ifvgs = applyIFVG(postFVG5m, detectFVGs(postFVG5m)).filter(f => f.inversed && f.effectiveType === bias)
     if (!ifvgs.length) continue
 
     const latestIFVG  = ifvgs[ifvgs.length - 1]
-    const entryCandle = m1Slice.find(c => c.time > latestIFVG.time)
+    const entryCandle = postFVG5m.find(c => c.time > latestIFVG.time)
     if (!entryCandle) continue
     const entryPrice = entryCandle.close
 
@@ -224,12 +204,12 @@ function runBacktest(candles1h, candles5m, candles1m, symbol) {
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (slDist === 0 || tpDist / slDist < MIN_RR) continue
 
-    // Step 7: Simulate outcome on 1M
-    const entryIdx1m = bsFloor(candles1m, entryCandle.time)
-    const future1m   = candles1m.slice(entryIdx1m + 1, entryIdx1m + 300)
+    // Step 7: Simulate outcome on 5M
+    const entryIdx  = candles5m.indexOf(entryCandle)
+    const future5m  = candles5m.slice(entryIdx + 1, entryIdx + 200)
     let outcome = null, exitPrice = null, exitTime = null
 
-    for (const fc of future1m) {
+    for (const fc of future5m) {
       if (bias === 'bullish') {
         if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
         if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
@@ -276,25 +256,24 @@ export default async function handler(req, res) {
   if (!ticker) return res.status(400).json({ error: 'Unknown symbol' })
 
   try {
-    const [candles1h, candles5m, candles1m] = await Promise.all([
+    const [candles1h, candles5m] = await Promise.all([
       fetchTF(ticker, '1h', '1y'),
       fetchTF(ticker, '5m', '60d'),
-      fetch1mChunked(ticker, 4),
     ])
 
-    const trades   = runBacktest(candles1h, candles5m, candles1m, symbol)
+    const trades   = runBacktest(candles1h, candles5m, symbol)
     const wins     = trades.filter(t => t.outcome === 'win').length
     const losses   = trades.filter(t => t.outcome === 'loss').length
     const winRate  = trades.length ? ((wins / trades.length) * 100).toFixed(1) : '0.0'
     const totalPnl = trades.reduce((s, t) => s + t.pnlDollars, 0)
 
-    const earliest = candles1m.length ? new Date(candles1m[0].time * 1000).toISOString().split('T')[0] : null
-    const latest   = candles1m.length ? new Date(candles1m[candles1m.length - 1].time * 1000).toISOString().split('T')[0] : null
-    const dataNote = `1m data: ${earliest} → ${latest} | Daily H/L Sweep + BOS + FVG + IFVG`
+    const earliest = candles5m.length ? new Date(candles5m[0].time * 1000).toISOString().split('T')[0] : null
+    const latest   = candles5m.length ? new Date(candles5m[candles5m.length - 1].time * 1000).toISOString().split('T')[0] : null
+    const dataNote = `5m data: ${earliest} → ${latest} | Daily H/L Sweep + BOS + FVG + IFVG`
 
-    res.setHeader('Cache-Control', 's-maxage=300')
+    res.setHeader('Cache-Control', 's-maxage=3600')
     return res.status(200).json({ symbol, trades, wins, losses, winRate, totalPnl, dataNote,
-      candles1h, candles5m, candles1m })
+      candles1h, candles5m })
   } catch (err) {
     return res.status(500).json({ error: err.message })
   }
