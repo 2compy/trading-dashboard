@@ -375,8 +375,26 @@ function runBacktest(candles5m, candles1m, symbol) {
   // Only iterate 5m candles that fall within the 1m data range
   const m1Start = candles1m.length ? candles1m[0].time : 0
 
+  // Incremental session H/L tracker (O(n) instead of O(n²))
+  let sessionDay = null, sessionHigh = -Infinity, sessionLow = Infinity
+
   for (let i = 20; i < candles5m.length - 1; i++) {
     const now5m    = candles5m[i]
+
+    // Update session H/L incrementally
+    const day = getETDateStr(now5m.time)
+    if (day !== sessionDay) {
+      sessionDay = day; sessionHigh = -Infinity; sessionLow = Infinity
+    }
+    // Use candle i-1 to avoid self-reference
+    if (i > 0) {
+      const prev = candles5m[i - 1]
+      if (prev && getETDateStr(prev.time) === sessionDay) {
+        sessionHigh = Math.max(sessionHigh, prev.high)
+        sessionLow  = Math.min(sessionLow,  prev.low)
+      }
+    }
+
     const recent5m = candles5m.slice(Math.max(0, i - 30), i + 1)
 
     if (now5m.time < m1Start) continue
@@ -400,17 +418,14 @@ function runBacktest(candles5m, candles1m, symbol) {
       }
     }
 
-    if (!sweepBias) {
-      const sessionHL = getSessionHL(candles5m, now5m.time)
-      if (sessionHL) {
-        for (let j = recent5m.length - 1; j >= 0; j--) {
-          const c = recent5m[j]
-          if (c.low < sessionHL.low && c.close > sessionHL.low) {
-            sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
-          }
-          if (c.high > sessionHL.high && c.close < sessionHL.high) {
-            sweepBias = 'bearish'; sweepWickExtreme = c.high; sweepTime = c.time; break
-          }
+    if (!sweepBias && sessionHigh > -Infinity) {
+      for (let j = recent5m.length - 1; j >= 0; j--) {
+        const c = recent5m[j]
+        if (c.low < sessionLow && c.close > sessionLow) {
+          sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
+        }
+        if (c.high > sessionHigh && c.close < sessionHigh) {
+          sweepBias = 'bearish'; sweepWickExtreme = c.high; sweepTime = c.time; break
         }
       }
     }
