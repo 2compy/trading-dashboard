@@ -841,7 +841,7 @@ export default async function handler(req, res) {
     const latest   = candles5m.length ? new Date(candles5m[candles5m.length - 1].time * 1000).toISOString().split('T')[0] : null
     const dataNote = `5m: ${earliest} → ${latest} | 1m: Yahoo 7d (${candles1m.length} candles)`
 
-    res.setHeader('Cache-Control', 's-maxage=3600')
+    res.setHeader('Cache-Control', 's-maxage=60')
     return res.status(200).json({
       symbol, trades, wins, losses, winRate, totalPnl, dataNote,
     })
