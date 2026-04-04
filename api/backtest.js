@@ -537,10 +537,11 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
 
     const slDist = Math.abs(entryPrice - slPrice)
     const tpDist = Math.abs(tpPrice - entryPrice)
-    if (tpDist / slDist < MIN_RR) continue
+    if (slDist === 0 || tpDist <= 0) continue
+    if (tpDist / slDist < (SYMBOL_RR[symbol] || MIN_RR)) continue
 
     const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
-    const future1m   = candles1m.slice(entryIdx1m + 1, entryIdx1m + 720)
+    const future1m   = candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
     const entryIdx5m = candles5m.findIndex(c => c.time >= entryCandle.time)
     const simCandles = future1m.length > 0 ? future1m : candles5m.slice(entryIdx5m + 1, entryIdx5m + 200)
     let outcome = null, exitPrice = null, exitTime = null
@@ -654,7 +655,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     // Simulate: use 1m candles if available, else 5m
     const entryIdx1m = candles1m?.length ? candles1m.findIndex(c => c.time >= entryCandle.time) : -1
     const simCandles = entryIdx1m >= 0 && entryIdx1m < candles1m.length - 1
-      ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 720)
+      ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
       : candles5m.slice(entryIdx + 1, entryIdx + 200)
     let outcome = null, exitPrice = null, exitTime = null
 
