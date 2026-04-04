@@ -192,19 +192,23 @@ export const useStore = create((set, get) => ({
   },
 
   // --- Trade settings ---
-  tradeSettings: Object.fromEntries(FUTURES.map(f => [f.symbol, {
+  // Global settings shared across all symbols
+  tradeSettings: {
     amount: 1000,
     stopLoss: '',
     takeProfit: '',
     side: 'LONG',
-    tradeCount: 1,   // 1-5 or 'infinite'
-  }])),
+    tradeCount: 1,
+  },
+  // Per-symbol ON/OFF toggle
+  symbolEnabled: Object.fromEntries(FUTURES.map(f => [f.symbol, true])),
 
-  updateTradeSetting: (symbol, field, value) => set(state => ({
-    tradeSettings: {
-      ...state.tradeSettings,
-      [symbol]: { ...state.tradeSettings[symbol], [field]: value },
-    }
+  updateTradeSetting: (field, value) => set(state => ({
+    tradeSettings: { ...state.tradeSettings, [field]: value },
+  })),
+
+  toggleSymbol: (symbol) => set(state => ({
+    symbolEnabled: { ...state.symbolEnabled, [symbol]: !state.symbolEnabled[symbol] },
   })),
 
   // --- Master switch ---
@@ -216,17 +220,17 @@ export const useStore = create((set, get) => ({
     const state = get()
     if (!state.masterSwitch) return
 
+    const settings = state.tradeSettings
+    const count = settings.tradeCount === 'infinite' ? 1 : settings.tradeCount
+
     FUTURES.forEach(f => {
+      if (!state.symbolEnabled[f.symbol]) return
       const candles = state.candleData[f.symbol]
       const signal = runStrategy(candles)
       if (!signal) return
 
-      const settings = state.tradeSettings[f.symbol]
-      const count = settings.tradeCount === 'infinite' ? 1 : settings.tradeCount
-
+      const price = state.livePrice[f.symbol]
       for (let i = 0; i < count; i++) {
-        // Temporarily override side with strategy signal
-        const price = state.livePrice[f.symbol]
         const trade = {
           id: get().nextId + i,
           symbol: f.symbol,
@@ -254,7 +258,7 @@ export const useStore = create((set, get) => ({
   enterTrade: (symbol) => {
     const state = get()
     const price    = state.livePrice[symbol]
-    const settings = state.tradeSettings[symbol]
+    const settings = state.tradeSettings
     const count    = settings.tradeCount === 'infinite' ? 1 : settings.tradeCount
 
     const newTrades = []

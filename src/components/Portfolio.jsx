@@ -1,4 +1,5 @@
 import { useStore } from '../store'
+import PnLList from './PnLList'
 
 function StatCard({ label, value, color }) {
   return (
@@ -149,6 +150,9 @@ export default function Portfolio() {
           ))}
         </div>
       </div>
+
+      {/* P&L List */}
+      <PnLList />
     </div>
   )
 }

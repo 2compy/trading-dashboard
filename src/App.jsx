@@ -4,14 +4,11 @@ import LiveChart from './components/LiveChart'
 import TradeManager from './components/TradeManager'
 import TradeLogs from './components/TradeLogs'
 import Portfolio from './components/Portfolio'
-import PnLList from './components/PnLList'
-
 const TABS = [
-  { id: 'charts',    label: 'Live Charts',    icon: '📈' },
-  { id: 'trades',    label: 'Trade Manager',  icon: '⚙️' },
-  { id: 'logs',      label: 'Trade Logs',     icon: '📋' },
-  { id: 'pnl',       label: 'P&L List',       icon: '💰' },
-  { id: 'portfolio', label: 'Portfolio',       icon: '💼' },
+  { id: 'charts',    label: 'Live Charts',   icon: '📈' },
+  { id: 'trades',    label: 'Trade Manager', icon: '⚙️' },
+  { id: 'logs',      label: 'Trade Logs',    icon: '📋' },
+  { id: 'portfolio', label: 'Portfolio',      icon: '💼' },
 ]
 
 const USE_LIVE = !!import.meta.env.VITE_USE_LIVE_API
@@ -160,7 +157,6 @@ export default function App() {
         {tab === 'charts'    && <LiveChart />}
         {tab === 'trades'    && <TradeManager />}
         {tab === 'logs'      && <TradeLogs />}
-        {tab === 'pnl'       && <PnLList />}
         {tab === 'portfolio' && <Portfolio />}
       </main>
     </div>
