@@ -11,6 +11,34 @@ export const FUTURES = [
 
 export const TIMEFRAMES = ['1m', '5m', '15m', '1h', '1d']
 
+// CME futures: open Sun 6pm ET → Fri 5pm ET, with 15-min break 4:15-4:30pm ET daily
+export function isMarketOpen() {
+  const now = new Date()
+  // Convert to ET (UTC-5 standard, UTC-4 daylight)
+  const etOffset = isDST(now) ? -4 : -5
+  const et = new Date(now.getTime() + etOffset * 60 * 60 * 1000)
+  const day  = et.getUTCDay()  // 0=Sun, 1=Mon ... 6=Sat
+  const hour = et.getUTCHours()
+  const min  = et.getUTCMinutes()
+  const timeInMins = hour * 60 + min
+
+  // Saturday = always closed
+  if (day === 6) return false
+  // Sunday: open from 6:00 PM ET (18:00)
+  if (day === 0) return timeInMins >= 18 * 60
+  // Friday: close at 5:00 PM ET (17:00)
+  if (day === 5) return timeInMins < 17 * 60
+  // Mon-Thu: closed during maintenance window 4:15–4:30 PM ET
+  if (timeInMins >= 16 * 60 + 15 && timeInMins < 16 * 60 + 30) return false
+  return true
+}
+
+function isDST(date) {
+  const jan = new Date(date.getFullYear(), 0, 1).getTimezoneOffset()
+  const jul = new Date(date.getFullYear(), 6, 1).getTimezoneOffset()
+  return Math.min(jan, jul) === date.getTimezoneOffset()
+}
+
 function generateCandles(base, count = 200) {
   const candles = []
   let price = base
@@ -56,6 +84,8 @@ export const useStore = create((set, get) => ({
   livePrice: Object.fromEntries(FUTURES.map(f => [f.symbol, f.base])),
   priceChange: Object.fromEntries(FUTURES.map(f => [f.symbol, 0])),
   apiError: null,
+  marketOpen: isMarketOpen(),
+  refreshMarketStatus: () => set({ marketOpen: isMarketOpen() }),
 
   setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
   setTimeframe: (tf) => set({ timeframe: tf }),
@@ -80,6 +110,8 @@ export const useStore = create((set, get) => ({
 
   pollQuotes: async () => {
     if (!USE_LIVE) return
+    set({ marketOpen: isMarketOpen() })
+    if (!isMarketOpen()) return
     try {
       const res = await fetch('/api/quotes')
       const quotes = await res.json()
@@ -116,6 +148,7 @@ export const useStore = create((set, get) => ({
   // --- Simulated ticks (used when VITE_USE_LIVE_API not set) ---
   tickPrice: () => {
     if (USE_LIVE) return
+    if (!isMarketOpen()) return
     const state = get()
     const updatedData    = { ...state.candleData }
     const updatedPrice   = { ...state.livePrice }
@@ -141,6 +174,7 @@ export const useStore = create((set, get) => ({
 
   advanceCandle: () => {
     if (USE_LIVE) return
+    if (!isMarketOpen()) return
     const state = get()
     const updatedData = { ...state.candleData }
     const now = Math.floor(Date.now() / 1000)

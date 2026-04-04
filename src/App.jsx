@@ -22,6 +22,7 @@ export default function App() {
     tickPrice, advanceCandle, pollQuotes, fetchCandles,
     trades, apiError, selectedSymbol, timeframe,
     masterSwitch, toggleMasterSwitch, runAutoTrade,
+    marketOpen, refreshMarketStatus,
   } = useStore()
 
   // Simulated mode
@@ -45,6 +46,13 @@ export default function App() {
     return () => clearInterval(interval)
   }, [])
 
+  // Refresh market status every minute
+  useEffect(() => {
+    refreshMarketStatus()
+    const interval = setInterval(refreshMarketStatus, 60000)
+    return () => clearInterval(interval)
+  }, [])
+
   // Auto-trade on interval (30s) when master switch is ON
   useEffect(() => {
     if (!masterSwitch) return
@@ -64,10 +72,20 @@ export default function App() {
         </div>
 
         <div className="header-right">
-          {/* Live indicator */}
-          <div className="live-indicator">
-            <span className="live-dot" />
-            <span className="live-label">{USE_LIVE ? 'LIVE' : 'SIM'}</span>
+          {/* Market status */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: marketOpen ? '#22c55e' : '#ef4444',
+              display: 'inline-block',
+              animation: marketOpen ? 'pulse 2s ease-in-out infinite' : 'none',
+            }} />
+            <span style={{
+              fontSize: 11, fontWeight: 700, letterSpacing: '0.5px',
+              color: marketOpen ? '#22c55e' : '#ef4444',
+            }}>
+              {marketOpen ? (USE_LIVE ? 'LIVE' : 'SIM') : 'CLOSED'}
+            </span>
           </div>
 
           {openCount > 0 && (
@@ -105,6 +123,12 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {!marketOpen && (
+        <div style={{ background: '#1c1c1c', color: '#6b7280', padding: '5px 20px', fontSize: 12, textAlign: 'center', borderBottom: '1px solid #1f2937' }}>
+          Markets closed — CME futures reopen Sunday 6:00 PM ET
+        </div>
+      )}
 
       {apiError && (
         <div style={{ background: '#450a0a', color: '#fca5a5', padding: '6px 20px', fontSize: 12 }}>
