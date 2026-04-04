@@ -153,12 +153,27 @@ function bsFloor(candles, t) {
   return idx
 }
 
-// ── SL/TP: fixed 50pt SL / 75pt TP for all symbols ───────────────────────────
-function getTPSL(symbol, bias, entryPrice) {
-  return {
-    slPrice: bias === 'bullish' ? entryPrice - 50 : entryPrice + 50,
-    tpPrice: bias === 'bullish' ? entryPrice + 75 : entryPrice - 75,
+// ── SL/TP: 30pt fixed SL, TP at nearest prev swing H/L in 50–70pt window ─────
+function getTPSL(symbol, bias, entryPrice, recent5m) {
+  const slPrice = bias === 'bullish' ? entryPrice - 30 : entryPrice + 30
+
+  // Look for nearest swing high/low within 50–70 pts of entry
+  const { highs, lows } = detectSwings(recent5m, 3)
+  let tpPrice = null
+
+  if (bias === 'bullish') {
+    const candidates = highs
+      .filter(h => h.price > entryPrice + 50 && h.price <= entryPrice + 70)
+      .sort((a, b) => a.price - b.price)
+    tpPrice = candidates[0]?.price ?? entryPrice + 60  // default 60pt if none found
+  } else {
+    const candidates = lows
+      .filter(l => l.price < entryPrice - 50 && l.price >= entryPrice - 70)
+      .sort((a, b) => b.price - a.price)
+    tpPrice = candidates[0]?.price ?? entryPrice - 60  // default 60pt if none found
   }
+
+  return { slPrice, tpPrice }
 }
 
 // ── Main backtest ─────────────────────────────────────────────────────────────
@@ -228,7 +243,7 @@ function runBacktest(candles5m, candles1m, symbol) {
     const entryPrice = entryCandle.close
 
     // ── SL / TP per symbol ───────────────────────────────────────────────────
-    const tpsl = getTPSL(symbol, bias, entryPrice)
+    const tpsl = getTPSL(symbol, bias, entryPrice, recent5m)
     if (!tpsl) continue
     const { slPrice, tpPrice } = tpsl
 
@@ -237,7 +252,7 @@ function runBacktest(candles5m, candles1m, symbol) {
 
     const slDist = Math.abs(entryPrice - slPrice)
     const tpDist = Math.abs(tpPrice - entryPrice)
-    if (slDist === 0 || tpDist / slDist < MIN_RR) continue
+    if (slDist === 0 || tpDist <= 0) continue
 
     // ── Simulate on 5M ───────────────────────────────────────────────────────
     const entryIdx = bsFloor(candles5m, entryCandle.time)
