@@ -294,6 +294,8 @@ function runBacktestMGC(candles5m) {
   const candles1h  = buildHTFCandles(candles5m, 60)
   const candles4h  = buildHTFCandles(candles5m, 240)
   let lastTradeTime = 0
+  const usedFVGs       = new Set()  // one trade per FVG
+  const usedEntryTimes = new Set()  // no duplicate timestamps
 
   for (let i = 20; i < candles5m.length - 1; i++) {
     const now5m    = candles5m[i]
@@ -365,6 +367,8 @@ function runBacktestMGC(candles5m) {
       }
     }
     if (!entryCandle || touchCount > 1) continue  // skip if never touched or touched more than once
+    if (usedFVGs.has(fvg5m.time)) continue        // this FVG already triggered a trade
+    if (usedEntryTimes.has(entryCandle.time)) continue
     const entryPrice = fvg5m.mid
 
     // ── SL: $200 risk per contract. MGC multiplier = 10, so 200/10 = 20 points
@@ -408,6 +412,8 @@ function runBacktestMGC(candles5m) {
       signal: 'HTFBias+4h/1hClean+5mFVG+MidRetrace',
     })
 
+    usedFVGs.add(fvg5m.time)
+    usedEntryTimes.add(entryCandle.time)
     lastTradeTime = now5m.time
   }
 
@@ -773,9 +779,31 @@ export default async function handler(req, res) {
     ])
 
     // Route to symbol-specific strategy
-    const trades = symbol === 'MGC1!'
-      ? runBacktestMGC(candles5m)
-      : runBacktest(candles5m, candles1m, symbol)
+    let trades
+    if (symbol === 'MGC1!') {
+      // MGC: HTF Bias + IFVG Mid Retrace, merged with dedup
+      const htfTrades  = runBacktestMGC(candles5m)
+      const ifvgTrades = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
+
+      const all = [...htfTrades, ...ifvgTrades].sort((a, b) => a.time - b.time)
+      trades = []
+      const usedTimes = new Set()
+      for (const t of all) {
+        if (usedTimes.has(t.time)) continue
+        let dominated = false
+        for (const prev of trades) {
+          const gap = t.time - prev.time
+          if (gap < 600) { dominated = true; break }
+          if (gap < 1200 && t.bias === prev.bias) { dominated = true; break }
+        }
+        if (dominated) continue
+        t.id = trades.length + 1
+        trades.push(t)
+        usedTimes.add(t.time)
+      }
+    } else {
+      trades = runBacktest(candles5m, candles1m, symbol)
+    }
 
     const wins     = trades.filter(t => t.outcome === 'win').length
     const losses   = trades.filter(t => t.outcome === 'loss').length
