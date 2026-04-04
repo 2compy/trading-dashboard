@@ -53,7 +53,7 @@ export default function LiveChart() {
   const signalDebug = useMemo(() => {
     const c5m = mtfCandles[selectedSymbol]?.['5m'] || []
     const c1m = mtfCandles[selectedSymbol]?.['1m'] || []
-    return getSignalDebugInfo(c5m, c1m)
+    return getSignalDebugInfo(c5m, c1m, selectedSymbol)
   }, [mtfCandles, selectedSymbol])
 
   // ── Create chart once on mount ────────────────────────────────────────────

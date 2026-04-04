@@ -144,10 +144,10 @@ export function detectBOS(candles, swingHighs, swingLows) {
 }
 
 // ── Detect Inversed FVGs (for IFVG Midpoint Retrace strategy) ────────────────
-export function detectIFVGs(candles, fvgs) {
+export function detectIFVGs(candles, fvgs, minWidth = DEFAULT_FVG_WIDTH) {
   const ifvgs = []
   for (const fvg of fvgs) {
-    if (fvg.top - fvg.bottom < 7) continue  // min 7pt wide
+    if (fvg.top - fvg.bottom < minWidth) continue
 
     for (let k = 0; k < candles.length; k++) {
       const c = candles[k]
@@ -199,7 +199,22 @@ export function calcFuturesPnl(entryPrice, exitPrice, symbol, side) {
 const MIN_RR = 2
 const FIXED_SL = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
 const SYMBOL_RR = { 'MES1!': 3 }
-const MIN_FVG_WIDTH = 7
+// Per-symbol min FVG width for IFVG detection
+const MIN_FVG_WIDTH = {
+  'MES1!': 7,
+  'MNQ1!': 20,
+  'MGC1!': 3,
+  'Sl1!':  0.10,
+}
+const DEFAULT_FVG_WIDTH = 7
+// Per-symbol SL distance bounds
+const SL_BOUNDS = {
+  'MES1!': { min: 3, max: 60 },
+  'MNQ1!': { min: 10, max: 100 },
+  'MGC1!': { min: 2, max: 40 },
+  'Sl1!':  { min: 0.03, max: 1.0 },
+}
+const DEFAULT_SL_BOUNDS = { min: 3, max: 60 }
 
 // ── Sweep detection helper ──────────────────────────────────────────────────
 function findSweep(recent5m, candles5m, nowTs) {
@@ -405,12 +420,14 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
   const trades = []
   if (!candles5m.length) return trades
 
+  const fvgWidth = MIN_FVG_WIDTH[symbol] || DEFAULT_FVG_WIDTH
   const allFVGs  = detectFVGs(candles5m)
-  const allIFVGs = detectIFVGs(candles5m, allFVGs)
+  const allIFVGs = detectIFVGs(candles5m, allFVGs, fvgWidth)
 
   let lastTradeTime    = 0
   const usedIFVGs      = new Set()
   const usedEntryTimes = new Set()
+  const slBounds       = SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
 
   for (const ifvg of allIFVGs) {
     if (!isKillZone(ifvg.inversionTime)) continue
@@ -431,7 +448,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
       slDist = fixedSL2
     } else {
       slDist = Math.abs(entryPrice - (bias === 'bullish' ? ifvg.bottom - 2 : ifvg.top + 2))
-      if (slDist < 3 || slDist > 60) continue
+      if (slDist < slBounds.min || slDist > slBounds.max) continue
     }
     slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
 
@@ -538,7 +555,7 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
 }
 
 // ── Signal debug info (checks both strategies) ──────────────────────────────
-export function getSignalDebugInfo(candles5m, candles1m) {
+export function getSignalDebugInfo(candles5m, candles1m, symbol = 'MES1!') {
   if (!candles5m?.length)
     return { signal: null, step: 'no_data', label: 'Awaiting MTF candle data\u2026' }
 
@@ -558,9 +575,10 @@ export function getSignalDebugInfo(candles5m, candles1m) {
   }
 
   // ── Check Strategy B: IFVG Midpoint Retrace ────────────────────────────────
-  const fvgs = detectFVGs(recent5m).filter(f => f.top - f.bottom >= MIN_FVG_WIDTH)
+  const fvgWidth = MIN_FVG_WIDTH[symbol] || DEFAULT_FVG_WIDTH
+  const fvgs = detectFVGs(recent5m).filter(f => f.top - f.bottom >= fvgWidth)
   if (fvgs.length) {
-    const ifvgs = detectIFVGs(recent5m, fvgs)
+    const ifvgs = detectIFVGs(recent5m, fvgs, fvgWidth)
     if (ifvgs.length) {
       const latestIFVG  = ifvgs[ifvgs.length - 1]
       const entryCandle = findMidRetrace(recent5m, latestIFVG)
@@ -641,7 +659,7 @@ export function getSignalDebugInfo(candles5m, candles1m) {
 
 // ── Live signal: returns 'LONG', 'SHORT', or null ───────────────────────────
 // Checks BOTH strategies — first signal wins
-export function getLiveSignal(candles5m, candles1m) {
+export function getLiveSignal(candles5m, candles1m, symbol = 'MES1!') {
   if (!candles5m?.length) return null
 
   const recent5m = candles5m.slice(-60)
@@ -650,9 +668,10 @@ export function getLiveSignal(candles5m, candles1m) {
   if (!isKillZone(nowTs)) return null
 
   // ── Strategy B: IFVG Midpoint Retrace ──────────────────────────────────────
-  const fvgs = detectFVGs(recent5m).filter(f => f.top - f.bottom >= MIN_FVG_WIDTH)
+  const fvgW = MIN_FVG_WIDTH[symbol] || DEFAULT_FVG_WIDTH
+  const fvgs = detectFVGs(recent5m).filter(f => f.top - f.bottom >= fvgW)
   if (fvgs.length) {
-    const ifvgs = detectIFVGs(recent5m, fvgs)
+    const ifvgs = detectIFVGs(recent5m, fvgs, fvgW)
     if (ifvgs.length) {
       const latestIFVG  = ifvgs[ifvgs.length - 1]
       const entryCandle = findMidRetrace(recent5m, latestIFVG)

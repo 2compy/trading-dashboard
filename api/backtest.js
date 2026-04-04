@@ -250,6 +250,23 @@ function findIFVGEntry(candles, fvg, bias) {
 const FIXED_SL = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
 // ── Min R:R per symbol ──────────────────────────────────────────────────────
 const SYMBOL_RR = { 'MES1!': 3 }
+// ── Min FVG width for IFVG detection, per symbol ────────────────────────────
+// MGC ~3100 → 3pt, MES ~5500 → 7pt, MNQ ~19000 → 20pt, Silver ~32 → 0.10
+const MIN_FVG_WIDTH = {
+  'MES1!': 7,
+  'MNQ1!': 20,
+  'MGC1!': 3,
+  'Sl1!':  0.10,
+}
+const DEFAULT_FVG_WIDTH = 7
+// ── SL distance bounds per symbol ───────────────────────────────────────────
+const SL_BOUNDS = {
+  'MES1!': { min: 3, max: 60 },
+  'MNQ1!': { min: 10, max: 100 },
+  'MGC1!': { min: 2, max: 40 },
+  'Sl1!':  { min: 0.03, max: 1.0 },
+}
+const DEFAULT_SL_BOUNDS = { min: 3, max: 60 }
 
 // ── SL/TP for default strategy ────────────────────────────────────────────────
 function getTPSL(bias, entryPrice, sweepWickExtreme, recent5m, symbol) {
@@ -424,14 +441,14 @@ function runBacktestMGC(candles5m) {
 // An FVG is "inversed" when price fully closes through it.
 //   Bullish FVG inversed (close < bottom) → bearish IFVG → SHORT on retrace
 //   Bearish FVG inversed (close > top)    → bullish IFVG → LONG on retrace
-function detectIFVGs(candles, fvgs) {
+function detectIFVGs(candles, fvgs, minWidth = DEFAULT_FVG_WIDTH) {
   const ifvgs = []
   // Build a time→index map for fast lookup
   const timeIdx = {}
   for (let i = 0; i < candles.length; i++) timeIdx[candles[i].time] = i
 
   for (const fvg of fvgs) {
-    if (fvg.top - fvg.bottom < 7) continue  // min 7pt wide
+    if (fvg.top - fvg.bottom < minWidth) continue
 
     // Start scanning from the FVG's position, cap at 200 candles ahead
     const startIdx = (timeIdx[fvg.time] || 0) + 1
@@ -618,9 +635,10 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
 
   if (!candles5m.length) return trades
 
-  // Find all FVGs, then all IFVGs across full dataset
+  // Find all FVGs, then all IFVGs across full dataset (symbol-aware width)
+  const fvgWidth = MIN_FVG_WIDTH[symbol] || DEFAULT_FVG_WIDTH
   const allFVGs  = detectFVGs(candles5m)
-  const allIFVGs = detectIFVGs(candles5m, allFVGs)
+  const allIFVGs = detectIFVGs(candles5m, allFVGs, fvgWidth)
 
   let lastTradeTime    = 0
   const usedIFVGs      = new Set()
@@ -650,11 +668,12 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     // SL: fixed per symbol, or FVG-based for ES
     let slDist, slPrice
     const fixedSL = FIXED_SL[symbol]
+    const slBounds = SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
     if (fixedSL != null) {
       slDist = fixedSL
     } else {
       slDist = Math.abs(entryPrice - (bias === 'bullish' ? ifvg.bottom - 2 : ifvg.top + 2))
-      if (slDist < 3 || slDist > 60) continue
+      if (slDist < slBounds.min || slDist > slBounds.max) continue
     }
     slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
 

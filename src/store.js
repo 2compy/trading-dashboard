@@ -60,7 +60,7 @@ import { getLiveSignal, calcFuturesPnl } from './utils/strategy'
 function runStrategy(candlesBySymbol, symbol) {
   const c5m = candlesBySymbol[symbol]?.['5m'] || []
   const c1m = candlesBySymbol[symbol]?.['1m'] || []
-  return getLiveSignal(c5m, c1m)
+  return getLiveSignal(c5m, c1m, symbol)
 }
 
 // Re-export for components
