@@ -1,6 +1,6 @@
 // Backtest server — fetches max available data and runs strategy server-side.
 // Yahoo Finance caps: 1m = 7d per request, 5m = 60d, 1h = 2y
-// We chunk 1m requests in parallel to maximise history (~30d of 1m data)
+// We chunk 1m requests in parallel to maximise history (~28d of 1m data)
 
 const SYMBOL_MAP = {
   'MES1!': 'MES=F',
@@ -73,9 +73,9 @@ function detectSwings(candles, lookback = 3) {
     const prev = candles.slice(i - lookback, i)
     const next = candles.slice(i + 1, i + lookback + 1)
     if (prev.every(x => x.high <= c.high) && next.every(x => x.high <= c.high))
-      highs.push({ price: c.high, time: c.time, index: i })
+      highs.push({ price: c.high, time: c.time })
     if (prev.every(x => x.low >= c.low) && next.every(x => x.low >= c.low))
-      lows.push({ price: c.low, time: c.time, index: i })
+      lows.push({ price: c.low, time: c.time })
   }
   return { highs, lows }
 }
@@ -92,23 +92,55 @@ function detectFVGs(candles) {
   return fvgs
 }
 
-function getHTFBias(h1Candles) {
-  const fvgs = detectFVGs(h1Candles)
-  if (!fvgs.length) return null
-  for (const fvg of fvgs) {
-    for (const c of h1Candles.filter(c => c.time > fvg.time)) {
-      if (fvg.type === 'bullish' && c.low  <= fvg.mid) { fvg.mitigated = true; break }
-      if (fvg.type === 'bearish' && c.high >= fvg.mid) { fvg.mitigated = true; break }
+// Pre-compute bias at every 1H candle in O(n) — avoids O(n²) recompute per bar
+function computeBiasTimeline(candles1h) {
+  const biasArr  = new Array(candles1h.length).fill(null)
+  const activeFVGs = [] // track live (unmitigated) FVGs incrementally
+
+  for (let i = 0; i < candles1h.length; i++) {
+    const c = candles1h[i]
+
+    // Check mitigation against current candle
+    for (const fvg of activeFVGs) {
+      if (fvg.mitigated) continue
+      if (fvg.type === 'bullish' && c.low  <= fvg.mid) { fvg.mitigated = true }
+      if (fvg.type === 'bearish' && c.high >= fvg.mid) { fvg.mitigated = true }
+    }
+
+    // New FVG formed by candles[i-2], candles[i-1], candles[i]
+    if (i >= 2) {
+      const a = candles1h[i - 2], b = candles1h[i - 1], cur = candles1h[i]
+      if (cur.low > a.high)
+        activeFVGs.push({ type: 'bullish', mid: (cur.low + a.high) / 2, mitigated: false })
+      if (cur.high < a.low)
+        activeFVGs.push({ type: 'bearish', mid: (cur.high + a.low) / 2, mitigated: false })
+    }
+
+    // Current bias = most recent unmitigated FVG
+    for (let j = activeFVGs.length - 1; j >= 0; j--) {
+      if (!activeFVGs[j].mitigated) { biasArr[i] = activeFVGs[j].type; break }
     }
   }
-  const active = fvgs.filter(f => !f.mitigated)
-  return active.length ? active[active.length - 1].type : null
+
+  return biasArr
+}
+
+// Binary search: latest candle index with time <= t
+function bsFloor(candles, t) {
+  let lo = 0, hi = candles.length - 1, idx = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (candles[mid].time <= t) { idx = mid; lo = mid + 1 }
+    else hi = mid - 1
+  }
+  return idx
 }
 
 function applyIFVG(candles, fvgs) {
   return fvgs.map(fvg => {
     let inversed = false
-    for (const c of candles.filter(c => c.time > fvg.time)) {
+    for (const c of candles) {
+      if (c.time <= fvg.time) continue
       if (fvg.type === 'bullish' && c.low  <= fvg.mid) { inversed = true; break }
       if (fvg.type === 'bearish' && c.high >= fvg.mid) { inversed = true; break }
     }
@@ -118,64 +150,69 @@ function applyIFVG(candles, fvgs) {
 
 function detectBOS(candles, highs, lows) {
   const bos = []
+  let lastHigh = null, lastLow = null
+  let hPtr = 0, lPtr = 0
+
   for (let i = 1; i < candles.length; i++) {
     const curr = candles[i], prev = candles[i - 1]
-    const pH = highs.filter(s => s.time < curr.time)
-    if (pH.length) {
-      const last = pH[pH.length - 1]
-      if (prev.close <= last.price && curr.close > last.price)
-        bos.push({ type: 'bullish', price: last.price, time: curr.time })
-    }
-    const pL = lows.filter(s => s.time < curr.time)
-    if (pL.length) {
-      const last = pL[pL.length - 1]
-      if (prev.close >= last.price && curr.close < last.price)
-        bos.push({ type: 'bearish', price: last.price, time: curr.time })
-    }
+
+    // Advance pointers for swings that precede curr.time
+    while (hPtr < highs.length && highs[hPtr].time < curr.time) { lastHigh = highs[hPtr]; hPtr++ }
+    while (lPtr < lows.length  && lows[lPtr].time  < curr.time) { lastLow  = lows[lPtr];  lPtr++ }
+
+    if (lastHigh && prev.close <= lastHigh.price && curr.close > lastHigh.price)
+      bos.push({ type: 'bullish', price: lastHigh.price, time: curr.time })
+    if (lastLow  && prev.close >= lastLow.price  && curr.close < lastLow.price)
+      bos.push({ type: 'bearish', price: lastLow.price,  time: curr.time })
   }
   return bos
 }
 
 // ── Backtest engine ───────────────────────────────────────────────────────────
-// Primary loop: 1m candles (most precise, up to ~30d)
-// Bias: 1H (2 years)
-// FVG entry: 5M
-// Confirmation: 1M IFVG + BOS
+// Loop: 5m candles for signal detection (much fewer iterations than 1m)
+// Bias: pre-computed from 1H timeline — O(n) not O(n²)
+// Confirmation: 1M IFVG + BOS on slice only
+// Simulation: future 1m candles for precise exit
 function runBacktest(candles1h, candles5m, candles1m, symbol) {
   const multiplier   = CONTRACT_MULTIPLIER[symbol] || 5
   const stopPoints   = SL_DOLLARS / multiplier
   const targetPoints = TP_DOLLARS / multiplier
   const trades = []
 
-  if (!candles1h.length || !candles1m.length) return trades
+  if (!candles1h.length || !candles1m.length || !candles5m.length) return trades
 
-  // Main loop over 1m candles — most granular available
-  for (let i = 20; i < candles1m.length - 1; i++) {
-    const now1m = candles1m[i]
+  // Pre-compute 1H bias for every hour in O(n)
+  const h1BiasArr = computeBiasTimeline(candles1h)
 
-    // 1H bias at this moment
-    const h1Slice = candles1h.filter(c => c.time <= now1m.time)
-    if (h1Slice.length < 10) continue
-    const bias = getHTFBias(h1Slice)
+  function getBiasAt(time) {
+    const idx = bsFloor(candles1h, time)
+    return idx >= 0 ? h1BiasArr[idx] : null
+  }
+
+  // Main loop: 5m candles — ~8,000 iterations for 60d vs ~40,000 for 1m
+  for (let i = 20; i < candles5m.length - 1; i++) {
+    const now5m = candles5m[i]
+    const bias  = getBiasAt(now5m.time)
     if (!bias) continue
 
-    // 5M FVG aligned with bias — look at last 10 5m candles before now
-    const recent5m = candles5m.filter(c => c.time <= now1m.time).slice(-10)
-    if (recent5m.length < 3) continue
-    const fvgs5m = detectFVGs(recent5m).filter(f => f.type === bias)
+    // 5M FVG aligned with bias — last 10 candles
+    const recent5m = candles5m.slice(Math.max(0, i - 10), i + 1)
+    const fvgs5m   = detectFVGs(recent5m).filter(f => f.type === bias)
     if (!fvgs5m.length) continue
     const fvg5m = fvgs5m[fvgs5m.length - 1]
 
-    // 1M slice after the 5M FVG formed
-    const m1Slice = candles1m.filter(c => c.time > fvg5m.time && c.time <= now1m.time)
-    if (m1Slice.length < 5) continue
+    // 1m slice: after the 5m FVG formed, up to now5m
+    const m1Start = bsFloor(candles1m, fvg5m.time) + 1
+    const m1End   = bsFloor(candles1m, now5m.time)
+    if (m1End - m1Start < 5) continue
+    const m1Slice = candles1m.slice(m1Start, m1End + 1)
 
     // IFVG on 1m
     const raw1mFVGs   = detectFVGs(m1Slice)
     const ifvgSignals = applyIFVG(m1Slice, raw1mFVGs).filter(f => f.inversed && f.effectiveType === bias)
     if (!ifvgSignals.length) continue
 
-    // BOS on 1m after the IFVG
+    // BOS on 1m after IFVG
     const { highs: m1H, lows: m1L } = detectSwings(m1Slice, 2)
     const bos          = detectBOS(m1Slice, m1H, m1L).filter(b => b.type === bias)
     const latestIFVG   = ifvgSignals[ifvgSignals.length - 1]
@@ -191,7 +228,8 @@ function runBacktest(candles1h, candles5m, candles1m, symbol) {
     const targetPrice = bias === 'bullish' ? entryPrice + targetPoints : entryPrice - targetPoints
 
     // Simulate on future 1m candles
-    const future1m = candles1m.slice(i + 1, i + 200)
+    const entryIdx1m = bsFloor(candles1m, entryCandle.time)
+    const future1m   = candles1m.slice(entryIdx1m + 1, entryIdx1m + 201)
     let outcome = null, exitPrice = null, exitTime = null
 
     for (const fc of future1m) {
@@ -221,7 +259,7 @@ function runBacktest(candles1h, candles5m, candles1m, symbol) {
       signal:      'IFVG+BOS',
     })
 
-    i += 10 // skip ahead to avoid overlapping trades
+    i += 5 // skip ahead to avoid overlapping trades
   }
 
   return trades
