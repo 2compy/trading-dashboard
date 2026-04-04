@@ -174,18 +174,38 @@ function detectBOS(candles, highs, lows) {
   return bos
 }
 
-// ── Session H/L (current day's H/L from earlier candles, excluding last 3) ───
-function getSessionHL(candles5m, nowTs) {
-  const todayStr = getETDateStr(nowTs)
-  const todayCandles = candles5m.filter(c => getETDateStr(c.time) === todayStr)
-  if (todayCandles.length <= 5) return null
-  const sessionCandles = todayCandles.slice(0, -3)
-  let high = -Infinity, low = Infinity
-  for (const c of sessionCandles) {
-    if (c.high > high) high = c.high
-    if (c.low  < low)  low  = c.low
+// ── Pre-build session H/L index (avoids O(n²) in main loop) ─────────────────
+// Returns a Map: dayString → sorted array of {time, runningHigh, runningLow}
+function buildSessionHLIndex(candles5m) {
+  const byDay = {}
+  for (const c of candles5m) {
+    const d = getETDateStr(c.time)
+    if (!byDay[d]) byDay[d] = []
+    byDay[d].push(c)
   }
-  return { high, low }
+  const index = {}
+  for (const [day, candles] of Object.entries(byDay)) {
+    let high = -Infinity, low = Infinity
+    const running = []
+    for (const c of candles) {
+      if (c.high > high) high = c.high
+      if (c.low  < low)  low  = c.low
+      running.push({ time: c.time, high, low })
+    }
+    index[day] = running
+  }
+  return index
+}
+
+// Look up session H/L from pre-built index (O(1) per call)
+function getSessionHLFromIndex(sessionIndex, nowTs) {
+  const todayStr = getETDateStr(nowTs)
+  const dayData = sessionIndex[todayStr]
+  if (!dayData || dayData.length <= 5) return null
+  // Use H/L up to 3 candles before current to avoid self-reference
+  const idx = dayData.length - 4  // exclude last 3
+  if (idx < 0) return null
+  return { high: dayData[idx].high, low: dayData[idx].low }
 }
 
 // Returns true if any open FVG on these candles overlaps the path from price → target
@@ -371,9 +391,10 @@ function runBacktest(candles5m, candles1m, symbol) {
 
   if (!candles5m.length || !candles1m.length) return trades
 
-  const dailyHL = buildDailyHL(candles5m)
-  let lastTradeTime = 0
-  const usedSweeps  = new Set()   // prevent same sweep from generating multiple trades
+  const dailyHL      = buildDailyHL(candles5m)
+  const sessionIndex = buildSessionHLIndex(candles5m)  // pre-built for O(1) lookups
+  let lastTradeTime  = 0
+  const usedSweeps   = new Set()   // prevent same sweep from generating multiple trades
   const usedEntryTimes = new Set() // prevent two trades at the exact same time
 
   // Only iterate 5m candles that fall within the 1m data range
@@ -407,7 +428,7 @@ function runBacktest(candles5m, candles1m, symbol) {
 
     // Fallback: session H/L sweep (current day)
     if (!sweepBias) {
-      const sessionHL = getSessionHL(candles5m, now5m.time)
+      const sessionHL = getSessionHLFromIndex(sessionIndex, now5m.time)
       if (sessionHL) {
         for (let j = recent5m.length - 1; j >= 0; j--) {
           const c = recent5m[j]
