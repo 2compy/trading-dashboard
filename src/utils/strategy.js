@@ -27,7 +27,7 @@ const PREFERRED_KZ = {
   'MES1!': ['NY Open', 'SB', 'SB2', 'PM'],
   'MNQ1!': ['NY Open', 'SB', 'SB2', 'PM'],
   'MGC1!': ['London', 'NY Open', 'SB'],
-  'MSL1!': ['London', 'NY Open', 'SB'],
+  'SL1!': ['London', 'NY Open', 'SB'],
 }
 
 // ── Time helpers ──────────────────────────────────────────────────────────────
@@ -351,7 +351,7 @@ export const CONTRACT_MULTIPLIER = {
   'MES1!': 5,
   'MNQ1!': 2,
   'MGC1!': 10,
-  'MSL1!': 5,
+  'SL1!': 5,
 }
 
 const SL_DOLLARS = 200
