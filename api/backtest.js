@@ -391,11 +391,19 @@ function runBacktest(candles5m, candles1m, symbol) {
 
     const bias = sweepBias
 
-    // Entry: next 5m candle after BOS confirms
-    const bosIdx      = candles5m.findIndex(c => c.time >= latestBOS.time)
-    const entryCandle = bosIdx >= 0 ? candles5m[bosIdx + 1] : null
+    // Entry: 1M FVG + IFVG retrace after BOS
+    const m1After = candles1m.filter(c => c.time >= latestBOS.time && c.time <= now5m.time + 300)
+    if (m1After.length < 5) continue
+
+    const fvgs1m = detectFVGs(m1After).filter(f => f.type === bias)
+    if (!fvgs1m.length) continue
+    const fvg1m = fvgs1m[fvgs1m.length - 1]
+    if (fvg1m.top - fvg1m.bottom < 7) continue
+
+    const m1PostFVG   = m1After.filter(c => c.time > fvg1m.time)
+    const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, bias)
     if (!entryCandle) continue
-    const entryPrice = entryCandle.open
+    const entryPrice = entryCandle.close
 
     // SL/TP
     const tpsl = getTPSL(bias, entryPrice, sweepWickExtreme, recent5m)
@@ -410,12 +418,12 @@ function runBacktest(candles5m, candles1m, symbol) {
     if (slDist === 0 || tpDist <= 0) continue
     if (tpDist / slDist < MIN_RR) continue
 
-    // Simulate on 5m
-    const entryIdx = candles5m.indexOf(entryCandle)
-    const future5m = candles5m.slice(entryIdx + 1, entryIdx + 200)
+    // Simulate on 1m for accuracy
+    const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
+    const future1m   = candles1m.slice(entryIdx1m + 1, entryIdx1m + 300)
     let outcome = null, exitPrice = null, exitTime = null
 
-    for (const fc of future5m) {
+    for (const fc of future1m) {
       if (bias === 'bullish') {
         if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
         if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }

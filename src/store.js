@@ -243,7 +243,7 @@ export const useStore = create((set, get) => ({
     const settings = state.tradeSettings
     const count = settings.tradeCount === 'infinite' ? 1 : settings.tradeCount
     const nowSec = Math.floor(Date.now() / 1000)
-    const COOLDOWN = 3600 // 1 hour, matches backtest
+    const COOLDOWN = 60 // 1 minute between trades per symbol
 
     FUTURES.forEach(f => {
       if (!state.symbolEnabled[f.symbol]) return
