@@ -355,7 +355,7 @@ export const CONTRACT_MULTIPLIER = {
 }
 
 const SL_DOLLARS = 200
-const TP_DOLLARS = 300
+const TP_DOLLARS = 600
 
 // ── Full backtest ─────────────────────────────────────────────────────────────
 export function runBacktest(candles1h, candles5m, candles1m, symbol = 'MES1!') {
