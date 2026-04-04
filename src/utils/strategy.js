@@ -199,6 +199,8 @@ export function calcFuturesPnl(entryPrice, exitPrice, symbol, side) {
 const MIN_RR = 2
 const FIXED_SL = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
 const SYMBOL_RR = { 'MES1!': 3 }
+// Units (contracts) per trade per symbol
+const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2, 'Sl1!': 1 }
 // Per-symbol min FVG width for IFVG detection
 const MIN_FVG_WIDTH = {
   'MES1!': 7,
@@ -392,7 +394,8 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     if (!outcome) continue
 
     const pnlPoints  = outcome === 'win' ? tpDist : -slDist
-    const pnlDollars = parseFloat((pnlPoints * multiplier).toFixed(2))
+    const units      = UNITS[symbol] || 1
+    const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
 
     trades.push({
       time:        entryCandle.time,
@@ -403,7 +406,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
       targetPrice: parseFloat(tpPrice.toFixed(4)),
       exitPrice:   parseFloat(exitPrice.toFixed(4)),
       outcome,
-      pnlDollars,
+      pnlDollars, contracts: units,
       rr:          parseFloat((tpDist / slDist).toFixed(2)),
       signal:      entrySignal,
     })
@@ -496,7 +499,8 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
     if (!outcome) continue
 
     const pnlPoints  = outcome === 'win' ? tpDist : -slDist
-    const pnlDollars = parseFloat((pnlPoints * multiplier).toFixed(2))
+    const units      = UNITS[symbol] || 1
+    const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
 
     trades.push({
       time:        entryCandle.time,
@@ -507,7 +511,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
       targetPrice: parseFloat(tpPrice.toFixed(4)),
       exitPrice:   parseFloat(exitPrice.toFixed(4)),
       outcome,
-      pnlDollars,
+      pnlDollars, contracts: units,
       rr:          parseFloat((tpDist / slDist).toFixed(2)),
       signal:      'IFVG-Mid-Retrace',
     })

@@ -12,6 +12,8 @@ const SYMBOL_MAP = {
 }
 
 const CONTRACT_MULTIPLIER = { 'MES1!': 5, 'MNQ1!': 2, 'MGC1!': 10, 'Sl1!': 5 }
+// Units (contracts) per trade per symbol
+const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2, 'Sl1!': 1 }
 const MIN_RR = 2
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
@@ -417,7 +419,8 @@ function runBacktestMGC(candles5m) {
     if (!outcome) continue
 
     const pnlPoints  = outcome === 'win' ? tpDist : -slDist
-    const pnlDollars = parseFloat((pnlPoints * multiplier).toFixed(2))  // 1 contract
+    const units      = UNITS['MGC1!'] || 1
+    const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
     const rr         = parseFloat((tpDist / slDist).toFixed(2))
 
     trades.push({
@@ -426,7 +429,7 @@ function runBacktestMGC(candles5m) {
       stopPrice:   parseFloat(slPrice.toFixed(4)),
       targetPrice: parseFloat(tpPrice.toFixed(4)),
       exitPrice:   parseFloat(exitPrice.toFixed(4)),
-      outcome, pnlDollars, rr, contracts: 1,
+      outcome, pnlDollars, rr, contracts: units,
       signal: 'HTFBias+4h/1hClean+5mFVG+MidRetrace',
     })
 
@@ -608,7 +611,8 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     if (!outcome) continue
 
     const pnlPoints  = outcome === 'win' ? tpDist : -slDist
-    const pnlDollars = parseFloat((pnlPoints * multiplier).toFixed(2))
+    const units      = UNITS[symbol] || 1
+    const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
 
     trades.push({
       time:        entryCandle.time,
@@ -618,7 +622,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
       stopPrice:   parseFloat(slPrice.toFixed(4)),
       targetPrice: parseFloat(tpPrice.toFixed(4)),
       exitPrice:   parseFloat(exitPrice.toFixed(4)),
-      outcome, pnlDollars,
+      outcome, pnlDollars, contracts: units,
       rr:          parseFloat((tpDist / slDist).toFixed(2)),
       signal:      entrySignal,
     })
@@ -724,7 +728,8 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     if (!outcome) continue
 
     const pnlPoints  = outcome === 'win' ? tpDist : -slDist
-    const pnlDollars = parseFloat((pnlPoints * multiplier).toFixed(2))
+    const units      = UNITS[symbol] || 1
+    const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
     const rrActual   = parseFloat((tpDist / slDist).toFixed(2))
 
     trades.push({
@@ -733,7 +738,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
       stopPrice:   parseFloat(slPrice.toFixed(4)),
       targetPrice: parseFloat(tpPrice.toFixed(4)),
       exitPrice:   parseFloat(exitPrice.toFixed(4)),
-      outcome, pnlDollars, rr: rrActual,
+      outcome, pnlDollars, rr: rrActual, contracts: units,
       signal: 'IFVG-Mid-Retrace',
     })
 
