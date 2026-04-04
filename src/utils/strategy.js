@@ -194,22 +194,20 @@ export function runBacktest(candles1h, candles5m, candles1m, opts = {}) {
     const ifvg1m       = applyIFVG(m1Slice, raw1mFVGs)
     const ifvgSignals  = ifvg1m.filter(f => f.inversed && f.effectiveType === bias)
 
-    if (!bos.length && !sweeps.length && !ifvgSignals.length) continue
+    // Require BOTH an IFVG and a BOS — no trade without both present
+    if (!ifvgSignals.length || !bos.length) continue
 
-    // If only IFVG confirmed (no BOS/sweep), use the inversion candle time as confirmation
-    const ifvgConfirm = ifvgSignals.length
-      ? [{ time: ifvgSignals[ifvgSignals.length - 1].time, price: ifvgSignals[ifvgSignals.length - 1].mid }]
-      : []
-
-    // 4. Entry: earliest confirmation (BOS, sweep, or IFVG)
-    const confirmation = [...bos, ...sweeps, ...ifvgConfirm].sort((a, b) => a.time - b.time)[0]
+    // 4. Entry: earliest BOS that comes after the IFVG inversion
+    const latestIFVG = ifvgSignals[ifvgSignals.length - 1]
+    const bosAfterIFVG = bos.filter(b => b.time >= latestIFVG.time)
+    if (!bosAfterIFVG.length) continue
+    const confirmation = bosAfterIFVG.sort((a, b) => a.time - b.time)[0]
     const entryPrice = m1Slice.find(c => c.time >= confirmation.time)?.close
     if (!entryPrice) continue
 
-    // 5. Stop loss: opposite side of the 5M FVG
-    const stopPrice = bias === 'bullish' ? fvg.bottom * 0.9995 : fvg.top * 1.0005
-    const stopDist  = Math.abs(entryPrice - stopPrice)
-    if (stopDist === 0) continue
+    // 5. Stop loss: exactly 25 points below entry (long) or above entry (short)
+    const stopDist  = 25
+    const stopPrice = bias === 'bullish' ? entryPrice - stopDist : entryPrice + stopDist
 
     // 6. Target: nearest resting liquidity (swing high for longs, swing low for shorts)
     const futureCandles5m = candles5m.slice(i + 1, i + 50)
@@ -260,7 +258,7 @@ export function runBacktest(candles1h, candles5m, candles1m, opts = {}) {
       outcome,
       pnlPct:      parseFloat(pnlPct.toFixed(2)),
       rr:          parseFloat((Math.abs(targetPrice - entryPrice) / stopDist).toFixed(2)),
-      signal:      hasIFVG ? (bos.length || sweeps.length ? 'BOS+IFVG' : 'IFVG') : (bos.length ? 'BOS' : 'SWEEP'),
+      signal:      'IFVG+BOS',
     })
 
     // Skip ahead to avoid overlapping trades
@@ -286,11 +284,11 @@ export function getLiveSignal(candles1h, candles5m, candles1m) {
   const bos    = detectBOS(recent1m, highs, lows).filter(b => b.type === bias)
   const sweeps = detectSweeps(recent1m, highs, lows).filter(s => s.type === bias)
 
-  // Check 1M IFVG — an inversed 1M FVG aligned with bias is a valid entry signal
-  const raw1m  = detectFVGs(recent1m)
-  const ifvgs  = applyIFVG(recent1m, raw1m).filter(f => f.inversed && f.effectiveType === bias)
+  // Require BOTH IFVG and BOS on 1M — no trade without both
+  const raw1m = detectFVGs(recent1m)
+  const ifvgs = applyIFVG(recent1m, raw1m).filter(f => f.inversed && f.effectiveType === bias)
 
-  if (!bos.length && !sweeps.length && !ifvgs.length) return null
+  if (!ifvgs.length || !bos.length) return null
 
   return bias === 'bullish' ? 'LONG' : 'SHORT'
 }
