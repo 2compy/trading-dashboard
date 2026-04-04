@@ -232,6 +232,9 @@ export const useStore = create((set, get) => ({
   masterSwitch: false,
   toggleMasterSwitch: () => set(state => ({ masterSwitch: !state.masterSwitch })),
 
+  // Tracks when the last auto trade fired per symbol (unix seconds)
+  lastAutoTradeTime: {},
+
   // Called by the auto-trade interval when master switch is ON
   runAutoTrade: () => {
     const state = get()
@@ -239,9 +242,16 @@ export const useStore = create((set, get) => ({
 
     const settings = state.tradeSettings
     const count = settings.tradeCount === 'infinite' ? 1 : settings.tradeCount
+    const nowSec = Math.floor(Date.now() / 1000)
+    const COOLDOWN = 3600 // 1 hour, matches backtest
 
     FUTURES.forEach(f => {
       if (!state.symbolEnabled[f.symbol]) return
+
+      // Skip if a trade already fired for this symbol within the cooldown window
+      const lastTime = state.lastAutoTradeTime[f.symbol] || 0
+      if (nowSec - lastTime < COOLDOWN) return
+
       const signal = runStrategy(state.mtfCandles, f.symbol)
       if (!signal) return
 
@@ -265,6 +275,9 @@ export const useStore = create((set, get) => ({
         }
         set(s => ({ trades: [trade, ...s.trades], nextId: s.nextId + 1 }))
       }
+      set(s => ({
+        lastAutoTradeTime: { ...s.lastAutoTradeTime, [f.symbol]: nowSec },
+      }))
     })
   },
 

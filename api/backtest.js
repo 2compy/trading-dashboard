@@ -88,6 +88,13 @@ function isKillZone(ts) {
          (mins >= 810 && mins < 900)
 }
 
+// MGC kill zones: Asia open (8pm-midnight ET), NY open (8am-noon ET)
+function isMGCKillZone(ts) {
+  const mins = getETMinutes(ts)
+  return (mins >= 1200) ||             // Asia: 8:00 PM – midnight ET
+         (mins >= 480 && mins < 720)   // NY:   8:00 AM – noon ET
+}
+
 // ── Strategy primitives ───────────────────────────────────────────────────────
 function buildDailyHL(candles5m) {
   const byDay = {}
@@ -224,7 +231,7 @@ function runBacktestMGC(candles5m) {
     const now5m    = candles5m[i]
     const recent5m = candles5m.slice(Math.max(0, i - 36), i + 1)  // ~3hrs of 5m
 
-    // MGC1! runs 24/7 — no kill zone filter
+    if (!isMGCKillZone(now5m.time)) continue
     if (now5m.time - lastTradeTime < 1200) continue
 
     // ── 4h trend direction (required — only trade with the 4h trend) ──────────
