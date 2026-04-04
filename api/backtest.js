@@ -218,6 +218,7 @@ function runBacktestMGC(candles5m) {
   const candles1h  = buildHTFCandles(candles5m, 60)
   const candles4h  = buildHTFCandles(candles5m, 240)
   let lastTradeTime = 0
+  const usedFVGs   = new Set()  // prevent same FVG from firing more than once
 
   for (let i = 20; i < candles5m.length - 1; i++) {
     const now5m    = candles5m[i]
@@ -289,6 +290,8 @@ function runBacktestMGC(candles5m) {
       }
     }
     if (!entryCandle || touchCount > 1) continue  // skip if never touched or touched more than once
+    if (usedFVGs.has(fvg5m.time)) continue        // this FVG already triggered a trade
+    usedFVGs.add(fvg5m.time)
     const entryPrice = fvg5m.mid
 
     // ── SL: $200 risk per contract. MGC multiplier = 10, so 200/10 = 20 points
@@ -319,7 +322,7 @@ function runBacktestMGC(candles5m) {
     if (!outcome) continue
 
     const pnlPoints  = outcome === 'win' ? tpDist : -slDist
-    const pnlDollars = parseFloat((pnlPoints * multiplier).toFixed(2))
+    const pnlDollars = parseFloat((pnlPoints * multiplier).toFixed(2))  // 1 contract
     const rr         = parseFloat((tpDist / slDist).toFixed(2))
 
     trades.push({
@@ -328,8 +331,8 @@ function runBacktestMGC(candles5m) {
       stopPrice:   parseFloat(slPrice.toFixed(4)),
       targetPrice: parseFloat(tpPrice.toFixed(4)),
       exitPrice:   parseFloat(exitPrice.toFixed(4)),
-      outcome, pnlDollars, rr,
-      signal: 'HTFBias+4h/1hClean+5mFVG+BOS',
+      outcome, pnlDollars, rr, contracts: 1,
+      signal: 'HTFBias+4h/1hClean+5mFVG+MidRetrace',
     })
 
     lastTradeTime = now5m.time
