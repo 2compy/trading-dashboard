@@ -224,7 +224,7 @@ function runBacktestMGC(candles5m) {
     const recent5m = candles5m.slice(Math.max(0, i - 36), i + 1)  // ~3hrs of 5m
 
     if (!isKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 3600) continue
+    if (now5m.time - lastTradeTime < 1200) continue
 
     // ── HTF bias: last BOS on 1h ─────────────────────────────────────────────
     const now1hIdx = candles1h.findLastIndex(c => c.time <= now5m.time)
@@ -316,7 +316,6 @@ function runBacktestMGC(candles5m) {
     })
 
     lastTradeTime = now5m.time
-    i += 10
   }
 
   return trades
@@ -337,7 +336,7 @@ function runBacktest(candles5m, candles1m, symbol) {
     const recent5m = candles5m.slice(Math.max(0, i - 30), i + 1)
 
     if (!isKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 3600) continue
+    if (now5m.time - lastTradeTime < 1200) continue
 
     const pdhl = getPrevDayHL(dailyHL, now5m.time)
     if (!pdhl) continue
@@ -416,7 +415,6 @@ function runBacktest(candles5m, candles1m, symbol) {
     })
 
     lastTradeTime = now5m.time
-    i += 10
   }
 
   return trades

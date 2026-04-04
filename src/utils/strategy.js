@@ -170,7 +170,7 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
     const recent5m = candles5m.slice(Math.max(0, i - 30), i + 1)
 
     if (!isKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 3600) continue
+    if (now5m.time - lastTradeTime < 1200) continue
 
     const pdhl = getPrevDayHL(dailyHL, now5m.time)
     if (!pdhl) continue
@@ -269,7 +269,6 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
     })
 
     lastTradeTime = now5m.time
-    i += 10
   }
 
   return trades
