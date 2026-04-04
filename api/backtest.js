@@ -195,10 +195,14 @@ function bsFloor(candles, t) {
 // SL: just beyond the sweep wick (2pt buffer) — natural invalidation level
 // TP: nearest swing high/low in 50–70pt window, default 60pt
 function getTPSL(bias, entryPrice, sweepWickExtreme, recent5m) {
-  // SL at the sweep wick with a 2pt buffer (tighter, but logical)
-  const slPrice = bias === 'bullish'
+  // SL at the sweep wick with a 2pt buffer, minimum 15pts from entry
+  let slPrice = bias === 'bullish'
     ? sweepWickExtreme - 2
     : sweepWickExtreme + 2
+
+  // Enforce minimum 15pt SL distance
+  if (bias === 'bullish' && entryPrice - slPrice < 15) slPrice = entryPrice - 15
+  if (bias === 'bearish' && slPrice - entryPrice < 15) slPrice = entryPrice + 15
 
   const slDist = Math.abs(entryPrice - slPrice)
   // If entry has already moved far past the sweep, SL would be too wide — skip

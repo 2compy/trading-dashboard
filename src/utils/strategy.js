@@ -212,7 +212,9 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
     if (!entryCandle) continue
 
     const entryPrice = entryCandle.close
-    const slPrice = bias === 'bullish' ? sweepWickExtreme - 2 : sweepWickExtreme + 2
+    let slPrice = bias === 'bullish' ? sweepWickExtreme - 2 : sweepWickExtreme + 2
+    if (bias === 'bullish' && entryPrice - slPrice < 15) slPrice = entryPrice - 15
+    if (bias === 'bearish' && slPrice - entryPrice < 15) slPrice = entryPrice + 15
     const slDist  = Math.abs(entryPrice - slPrice)
     if (slDist === 0 || slDist > 60) continue
 
