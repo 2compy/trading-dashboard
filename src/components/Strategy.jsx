@@ -1,7 +1,7 @@
 import { FUTURES } from '../store'
 import { CONTRACT_MULTIPLIER } from '../utils/strategy'
 
-const FIXED_SL = { 'MES1!': 15, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
+const FIXED_SL = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
 
 function sweepBOSStrategy(symbol) {
   return {
@@ -14,9 +14,11 @@ function sweepBOSStrategy(symbol) {
       { label: 'Entry (fallback)', value: 'Next 5M candle open after BOS' },
     ],
     risk: [
-      { label: 'Stop Loss', value: `Fixed ${FIXED_SL[symbol]}pt ($${FIXED_SL[symbol] * CONTRACT_MULTIPLIER[symbol]} risk)` },
-      { label: 'Take Profit', value: 'Nearest swing H/L \u2265 SL\u00d72 distance (default = SL\u00d72)' },
-      { label: 'Min R:R', value: '2:1' },
+      { label: 'Stop Loss', value: FIXED_SL[symbol] != null
+        ? `Fixed ${FIXED_SL[symbol]}pt ($${FIXED_SL[symbol] * CONTRACT_MULTIPLIER[symbol]} risk)`
+        : 'Sweep wick extreme \u00b12pt buffer (min 10pt, max 60pt)' },
+      { label: 'Take Profit', value: `Nearest swing H/L \u2265 SL\u00d7${symbol === 'MES1!' ? '3' : '2'} distance` },
+      { label: 'Min R:R', value: symbol === 'MES1!' ? '3:1' : '2:1' },
       { label: 'Cooldown', value: '10 min (backtest), 60s (live auto-trade)' },
       { label: 'Multiplier', value: `$${CONTRACT_MULTIPLIER[symbol]} per point` },
     ],

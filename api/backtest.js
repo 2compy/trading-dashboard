@@ -230,16 +230,31 @@ function findIFVGEntry(candles, fvg, bias) {
   return null
 }
 
-// ── Fixed SL per symbol ──────────────────────────────────────────────────────
-const FIXED_SL = { 'MES1!': 15, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
+// ── Fixed SL per symbol (null = use sweep wick) ─────────────────────────────
+const FIXED_SL = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
+// ── Min R:R per symbol ──────────────────────────────────────────────────────
+const SYMBOL_RR = { 'MES1!': 3 }
 
 // ── SL/TP for default strategy ────────────────────────────────────────────────
 function getTPSL(bias, entryPrice, sweepWickExtreme, recent5m, symbol) {
-  const slDist = FIXED_SL[symbol] || 15
-  const slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
+  let slPrice, slDist
+  const fixedSL = FIXED_SL[symbol]
 
+  if (fixedSL != null) {
+    slDist = fixedSL
+    slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
+  } else {
+    // Sweep wick SL (ES style)
+    slPrice = bias === 'bullish' ? sweepWickExtreme - 2 : sweepWickExtreme + 2
+    if (bias === 'bullish' && entryPrice - slPrice < 10) slPrice = entryPrice - 10
+    if (bias === 'bearish' && slPrice - entryPrice < 10) slPrice = entryPrice + 10
+    slDist = Math.abs(entryPrice - slPrice)
+    if (slDist > 60) return null
+  }
+
+  const rr = SYMBOL_RR[symbol] || MIN_RR
   // Dynamic TP: minimum = SL * RR, search window extends 30pt beyond that
-  const minTPDist = slDist * MIN_RR
+  const minTPDist = slDist * rr
   const maxTPDist = minTPDist + 30
 
   const { highs, lows } = detectSwings(recent5m, 3)
@@ -601,12 +616,20 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     const bias       = ifvg.ifvgBias
     const entryPrice = ifvg.mid
 
-    // SL: fixed per symbol
-    const slDist = FIXED_SL[symbol] || 15
-    const slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
+    // SL: fixed per symbol, or FVG-based for ES
+    let slDist, slPrice
+    const fixedSL = FIXED_SL[symbol]
+    if (fixedSL != null) {
+      slDist = fixedSL
+    } else {
+      slDist = Math.abs(entryPrice - (bias === 'bullish' ? ifvg.bottom - 2 : ifvg.top + 2))
+      if (slDist < 3 || slDist > 60) continue
+    }
+    slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
 
-    // TP: dynamic, minimum R:R ≥ 2
-    const minTPDist = slDist * MIN_RR
+    // TP: dynamic, minimum R:R per symbol
+    const rr = SYMBOL_RR[symbol] || MIN_RR
+    const minTPDist = slDist * rr
     const maxTPDist = minTPDist + 30
 
     const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)

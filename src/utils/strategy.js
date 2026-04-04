@@ -197,7 +197,8 @@ export function calcFuturesPnl(entryPrice, exitPrice, symbol, side) {
 }
 
 const MIN_RR = 2
-const FIXED_SL = { 'MES1!': 15, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
+const FIXED_SL = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20, 'Sl1!': 15 }
+const SYMBOL_RR = { 'MES1!': 3 }
 const MIN_FVG_WIDTH = 7
 
 // ── Sweep detection helper ──────────────────────────────────────────────────
@@ -322,11 +323,22 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
 
     if (usedEntryTimes.has(entryCandle.time)) continue
 
-    // SL/TP — fixed SL per symbol
-    const slDist = FIXED_SL[symbol] || 15
-    const slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
+    // SL/TP
+    let slPrice, slDist
+    const fixedSL = FIXED_SL[symbol]
+    if (fixedSL != null) {
+      slDist = fixedSL
+      slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
+    } else {
+      slPrice = bias === 'bullish' ? sweepWickExtreme - 2 : sweepWickExtreme + 2
+      if (bias === 'bullish' && entryPrice - slPrice < 10) slPrice = entryPrice - 10
+      if (bias === 'bearish' && slPrice - entryPrice < 10) slPrice = entryPrice + 10
+      slDist = Math.abs(entryPrice - slPrice)
+      if (slDist > 60) continue
+    }
 
-    const minTPDist = slDist * MIN_RR
+    const rr = SYMBOL_RR[symbol] || MIN_RR
+    const minTPDist = slDist * rr
     const maxTPDist = minTPDist + 30
     const { highs, lows } = detectSwings(recent5m, 3)
     let tpPrice
@@ -413,10 +425,18 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
     const bias       = ifvg.ifvgBias
     const entryPrice = ifvg.mid
 
-    const slDist  = FIXED_SL[symbol] || 15
-    const slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
+    let slDist, slPrice
+    const fixedSL2 = FIXED_SL[symbol]
+    if (fixedSL2 != null) {
+      slDist = fixedSL2
+    } else {
+      slDist = Math.abs(entryPrice - (bias === 'bullish' ? ifvg.bottom - 2 : ifvg.top + 2))
+      if (slDist < 3 || slDist > 60) continue
+    }
+    slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
 
-    const minTPDist = slDist * MIN_RR
+    const rr2 = SYMBOL_RR[symbol] || MIN_RR
+    const minTPDist = slDist * rr2
     const maxTPDist = minTPDist + 30
 
     const entryIdx  = candles5m.findIndex(c => c.time >= entryCandle.time)
