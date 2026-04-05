@@ -1,68 +1,47 @@
-import { useState } from 'react'
 import { useStore } from '../store'
 import { CONTRACT_MULTIPLIER } from '../utils/strategy'
 
 const UNIT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 const TRADE_LIMIT_OPTIONS = [1, 2, 3, 4, 5, '∞']
 
-const MARGIN_PER_CONTRACT = {
-  'MES1!': 1500,
-  'MNQ1!': 1850,
-  'MGC1!': 1000,
+// Base margin at reference prices — scales with live price
+const BASE_MARGIN = {
+  'MES1!': { margin: 1650.94, refPrice: 5400 },
+  'MNQ1!': { margin: 2412.80, refPrice: 18800 },
+  'MGC1!': { margin: 2354.10, refPrice: 3100 },
 }
 
 const STARTING_BALANCE = 100000
 
+function getMargin(symbol, livePrice) {
+  const base = BASE_MARGIN[symbol]
+  if (!base) return 1000
+  const price = livePrice || base.refPrice
+  return parseFloat((base.margin * (price / base.refPrice)).toFixed(2))
+}
+
 export default function PaperTrading() {
   const {
     futures, livePrice, tradeSettings, updateTradeSetting,
-    symbolEnabled, toggleSymbol, symbolSide,
+    symbolEnabled, toggleSymbol,
+    paperSwitch, togglePaperSwitch,
+    paperTrades, closePaperTrade,
   } = useStore()
 
-  const [paperOn, setPaperOn] = useState(false)
-  const [paperTrades, setPaperTrades] = useState([])
   const units = tradeSettings.paperUnits || 1
   const paperMaxPerSymbol = tradeSettings.paperMaxPerSymbol || {}
   const enabledSymbols = futures.filter(f => symbolEnabled[f.symbol])
 
   const getMaxForSymbol = (sym) => paperMaxPerSymbol[sym] || 3
 
-  const enterPaperTrade = () => {
-    enabledSymbols.forEach(f => {
-      const price = livePrice[f.symbol]
-      if (!price) return
-      setPaperTrades(prev => [...prev, {
-        id: Date.now() + Math.random(),
-        symbol: f.symbol,
-        side: symbolSide[f.symbol],
-        entry: price,
-        units,
-        time: new Date().toLocaleTimeString(),
-        date: new Date().toLocaleDateString(),
-        status: 'OPEN',
-      }])
-    })
-  }
-
-  const closePaperTrade = (id) => {
-    setPaperTrades(prev => prev.map(t => {
-      if (t.id !== id) return t
-      const exitPrice = livePrice[t.symbol]
-      const mult = CONTRACT_MULTIPLIER[t.symbol] || 5
-      const dir = t.side === 'LONG' ? 1 : -1
-      const pnlDollars = (exitPrice - t.entry) * mult * dir * t.units
-      return { ...t, status: 'CLOSED', exit: exitPrice, closeTime: new Date().toLocaleTimeString(), pnl: parseFloat(pnlDollars.toFixed(2)) }
-    }))
-  }
-
   const openPaper = paperTrades.filter(t => t.status === 'OPEN')
   const closedPaper = paperTrades.filter(t => t.status === 'CLOSED')
   const wins = closedPaper.filter(t => t.pnl > 0).length
   const losses = closedPaper.filter(t => t.pnl <= 0).length
   const winRate = closedPaper.length > 0 ? ((wins / closedPaper.length) * 100).toFixed(1) : null
-  const totalPnl = closedPaper.reduce((sum, t) => sum + t.pnl, 0)
+  const totalPnl = closedPaper.reduce((sum, t) => sum + (t.pnl || 0), 0)
   const balance = STARTING_BALANCE + totalPnl
-  const openMargin = openPaper.reduce((sum, t) => sum + (MARGIN_PER_CONTRACT[t.symbol] || 1000) * t.units, 0)
+  const openMargin = openPaper.reduce((sum, t) => sum + getMargin(t.symbol, livePrice[t.symbol]) * (t.units || 1), 0)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 640 }}>
@@ -73,24 +52,24 @@ export default function PaperTrading() {
           <div>
             <div style={{ fontWeight: 700, fontSize: 15 }}>Paper Trading</div>
             <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
-              {paperOn ? 'Simulated trades active — no real money' : 'Paper trading is off'}
+              {paperSwitch ? 'Strategy running — auto-entering shorts (no real money)' : 'Paper trading is off'}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: paperOn ? '#fbbf24' : '#6b7280' }}>
-              {paperOn ? 'ON' : 'OFF'}
+            <span style={{ fontSize: 12, fontWeight: 700, color: paperSwitch ? '#fbbf24' : '#6b7280' }}>
+              {paperSwitch ? 'ON' : 'OFF'}
             </span>
             <button
-              onClick={() => setPaperOn(!paperOn)}
+              onClick={togglePaperSwitch}
               style={{
                 position: 'relative', width: 56, height: 30, borderRadius: 15,
-                border: 'none', background: paperOn ? '#a16207' : '#374151',
+                border: 'none', background: paperSwitch ? '#a16207' : '#374151',
                 cursor: 'pointer', transition: 'background 0.2s',
               }}
             >
               <span style={{
                 position: 'absolute', top: 4,
-                left: paperOn ? 30 : 4,
+                left: paperSwitch ? 30 : 4,
                 width: 22, height: 22, borderRadius: '50%',
                 background: '#fff', transition: 'left 0.2s', display: 'block',
               }} />
@@ -111,7 +90,7 @@ export default function PaperTrading() {
               {totalPnl >= 0 ? '+' : ''}${totalPnl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
             {openMargin > 0 && (
-              <div style={{ fontSize: 9, color: '#6b7280', marginTop: 2 }}>${openMargin.toLocaleString()} in use</div>
+              <div style={{ fontSize: 9, color: '#6b7280', marginTop: 2 }}>${openMargin.toLocaleString(undefined, { maximumFractionDigits: 2 })} in use</div>
             )}
           </div>
         </div>
@@ -119,16 +98,14 @@ export default function PaperTrading() {
 
       {/* Units per trade */}
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <div style={{ fontWeight: 700, fontSize: 14 }}>Units per Trade</div>
-          <div style={{ fontSize: 12, color: '#fbbf24', fontFamily: 'monospace' }}>
-            ${(units * (MARGIN_PER_CONTRACT['MES1!'] || 1000)).toLocaleString()} / trade (ES)
-          </div>
-        </div>
-        <div style={{ fontSize: 11, color: '#6b7280' }}>Each unit = 1 contract of margin</div>
+        <div style={{ fontWeight: 700, fontSize: 14 }}>Units per Trade</div>
+        <div style={{ fontSize: 11, color: '#6b7280' }}>Each unit = 1 contract of margin (costs fluctuate with price)</div>
         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
           {UNIT_OPTIONS.map(n => {
-            const cost = n * (MARGIN_PER_CONTRACT['MES1!'] || 1000)
+            const avgCost = enabledSymbols.length > 0
+              ? enabledSymbols.reduce((s, f) => s + getMargin(f.symbol, livePrice[f.symbol]), 0) / enabledSymbols.length
+              : getMargin('MES1!', livePrice['MES1!'])
+            const cost = n * avgCost
             return (
               <button
                 key={n}
@@ -149,11 +126,14 @@ export default function PaperTrading() {
           })}
         </div>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 2 }}>
-          {futures.map(f => (
-            <div key={f.symbol} style={{ fontSize: 10, color: '#6b7280' }}>
-              {f.symbol}: <span style={{ color: '#fbbf24', fontFamily: 'monospace' }}>${((MARGIN_PER_CONTRACT[f.symbol] || 1000) * units).toLocaleString()}</span>
-            </div>
-          ))}
+          {futures.map(f => {
+            const m = getMargin(f.symbol, livePrice[f.symbol])
+            return (
+              <div key={f.symbol} style={{ fontSize: 10, color: '#6b7280' }}>
+                {f.symbol}: <span style={{ color: '#fbbf24', fontFamily: 'monospace' }}>${(m * units).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+            )
+          })}
         </div>
       </div>
 
@@ -167,7 +147,7 @@ export default function PaperTrading() {
             const price = livePrice[f.symbol]
             const symMax = getMaxForSymbol(f.symbol)
             const selectedMax = symMax === 'infinite' ? '∞' : symMax
-            const margin = MARGIN_PER_CONTRACT[f.symbol] || 1000
+            const margin = getMargin(f.symbol, price)
             return (
               <div key={f.symbol} style={{
                 padding: '10px 12px', borderRadius: 8,
@@ -179,7 +159,7 @@ export default function PaperTrading() {
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 13 }}>
                       {f.symbol}
-                      <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 400, marginLeft: 6 }}>${margin.toLocaleString()}/contract</span>
+                      <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 400, marginLeft: 6 }}>${margin.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/contract</span>
                     </div>
                     <div style={{ fontSize: 10, color: '#6b7280' }}>{f.name}</div>
                     <div style={{ fontFamily: 'monospace', color: '#fbbf24', fontSize: 12, marginTop: 1 }}>
@@ -235,26 +215,11 @@ export default function PaperTrading() {
           })}
         </div>
 
-        {paperOn && (
+        {paperSwitch && (
           <div style={{ fontSize: 11, color: '#fbbf24', background: '#451a03', borderRadius: 6, padding: '6px 10px', textAlign: 'center' }}>
-            Paper mode — {units} unit{units !== 1 ? 's' : ''} per trade on {enabledSymbols.length} symbol{enabledSymbols.length !== 1 ? 's' : ''}
+            Strategy running every 30s — {units} unit{units !== 1 ? 's' : ''} per trade on {enabledSymbols.length} symbol{enabledSymbols.length !== 1 ? 's' : ''}
           </div>
         )}
-
-        <button
-          onClick={enterPaperTrade}
-          disabled={!paperOn || enabledSymbols.length === 0}
-          style={{
-            width: '100%', padding: '10px 0', borderRadius: 8, border: 'none',
-            background: !paperOn || enabledSymbols.length === 0 ? '#1f2937' : '#a16207',
-            color: !paperOn || enabledSymbols.length === 0 ? '#4b5563' : '#fff',
-            fontWeight: 700, fontSize: 13, cursor: !paperOn || enabledSymbols.length === 0 ? 'not-allowed' : 'pointer',
-          }}
-        >
-          {!paperOn ? 'Enable paper trading to start'
-            : enabledSymbols.length === 0 ? 'No symbols selected'
-            : `Paper Trade — ${enabledSymbols.map(f => f.symbol).join(' · ')}`}
-        </button>
       </div>
 
       {/* Trade Tracker / Performance */}
@@ -296,7 +261,7 @@ export default function PaperTrading() {
             {futures.map(f => {
               const symTrades = closedPaper.filter(t => t.symbol === f.symbol)
               const symWins = symTrades.filter(t => t.pnl > 0).length
-              const symPnl = symTrades.reduce((s, t) => s + t.pnl, 0)
+              const symPnl = symTrades.reduce((s, t) => s + (t.pnl || 0), 0)
               const symWR = symTrades.length > 0 ? ((symWins / symTrades.length) * 100).toFixed(0) : null
               if (symTrades.length === 0) return null
               return (
@@ -328,7 +293,7 @@ export default function PaperTrading() {
             const currentPrice = livePrice[t.symbol]
             const mult = CONTRACT_MULTIPLIER[t.symbol] || 5
             const dir = t.side === 'LONG' ? 1 : -1
-            const unrealized = currentPrice ? ((currentPrice - t.entry) * mult * dir * t.units) : 0
+            const unrealized = currentPrice ? ((currentPrice - t.entryPrice) * mult * dir * (t.units || 1)) : 0
             return (
               <div key={t.id} style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -337,7 +302,8 @@ export default function PaperTrading() {
                 <div>
                   <span style={{ fontWeight: 700, fontSize: 12 }}>{t.symbol}</span>
                   <span style={{ fontSize: 11, color: t.side === 'LONG' ? '#4ade80' : '#f87171', marginLeft: 8 }}>{t.side}</span>
-                  <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 8 }}>{t.units}u @ ${t.entry.toFixed(2)}</span>
+                  <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 8 }}>{t.units || 1}u @ ${t.entryPrice?.toFixed(2)}</span>
+                  {t.signal && <span style={{ fontSize: 9, color: '#fbbf24', marginLeft: 6 }}>{t.signal}</span>}
                   <span style={{ fontSize: 11, fontFamily: 'monospace', marginLeft: 8, color: unrealized >= 0 ? '#4ade80' : '#f87171' }}>
                     {unrealized >= 0 ? '+' : ''}${unrealized.toFixed(2)}
                   </span>
@@ -365,11 +331,12 @@ export default function PaperTrading() {
             }}>
               <div>
                 <span style={{ fontWeight: 700, fontSize: 12 }}>{t.symbol}</span>
-                <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 8 }}>{t.side} {t.units}u</span>
-                <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 8 }}>${t.entry.toFixed(2)} → ${t.exit?.toFixed(2)}</span>
+                <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 8 }}>{t.side} {t.units || 1}u</span>
+                <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 8 }}>${t.entryPrice?.toFixed(2)} → ${t.exitPrice?.toFixed(2)}</span>
+                {t.signal && <span style={{ fontSize: 9, color: '#fbbf24', marginLeft: 6 }}>{t.signal}</span>}
               </div>
-              <span style={{ fontWeight: 700, fontSize: 12, fontFamily: 'monospace', color: t.pnl >= 0 ? '#4ade80' : '#f87171' }}>
-                {t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}
+              <span style={{ fontWeight: 700, fontSize: 12, fontFamily: 'monospace', color: (t.pnl || 0) >= 0 ? '#4ade80' : '#f87171' }}>
+                {(t.pnl || 0) >= 0 ? '+' : ''}${(t.pnl || 0).toFixed(2)}
               </span>
             </div>
           ))}

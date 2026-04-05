@@ -3,11 +3,18 @@ import { useStore } from '../store'
 const UNIT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 const TRADE_LIMIT_OPTIONS = [1, 2, 3, 4, 5, '∞']
 
-// Approximate intraday margin per contract
-const MARGIN_PER_CONTRACT = {
-  'MES1!': 1500,
-  'MNQ1!': 1850,
-  'MGC1!': 1000,
+// Base margin at reference prices — scales with live price
+const BASE_MARGIN = {
+  'MES1!': { margin: 1650.94, refPrice: 5400 },
+  'MNQ1!': { margin: 2412.80, refPrice: 18800 },
+  'MGC1!': { margin: 2354.10, refPrice: 3100 },
+}
+
+function getMargin(symbol, livePrice) {
+  const base = BASE_MARGIN[symbol]
+  if (!base) return 1000
+  const price = livePrice || base.refPrice
+  return parseFloat((base.margin * (price / base.refPrice)).toFixed(2))
 }
 
 export default function LiveTrading() {
@@ -21,7 +28,6 @@ export default function LiveTrading() {
   const enabledSymbols = futures.filter(f => symbolEnabled[f.symbol])
   const units = tradeSettings.liveUnits || 1
   const liveMaxPerSymbol = tradeSettings.liveMaxPerSymbol || {}
-  const costPerTrade = units * enabledSymbols.reduce((sum, f) => sum + (MARGIN_PER_CONTRACT[f.symbol] || 1000), 0)
 
   const getMaxForSymbol = (sym) => liveMaxPerSymbol[sym] || 3
 
@@ -33,7 +39,7 @@ export default function LiveTrading() {
         <div>
           <div style={{ fontWeight: 700, fontSize: 15 }}>Live Trading</div>
           <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
-            {masterSwitch ? 'Trades will be placed and executed' : 'Trading is disabled'}
+            {masterSwitch ? 'Strategy running — auto-entering shorts' : 'Trading is disabled'}
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -60,16 +66,14 @@ export default function LiveTrading() {
 
       {/* Units per trade */}
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <div style={{ fontWeight: 700, fontSize: 14 }}>Units per Trade</div>
-          <div style={{ fontSize: 12, color: '#60a5fa', fontFamily: 'monospace' }}>
-            ${(units * (MARGIN_PER_CONTRACT['MES1!'] || 1000)).toLocaleString()} / trade (ES)
-          </div>
-        </div>
-        <div style={{ fontSize: 11, color: '#6b7280' }}>Each unit = 1 contract of margin</div>
+        <div style={{ fontWeight: 700, fontSize: 14 }}>Units per Trade</div>
+        <div style={{ fontSize: 11, color: '#6b7280' }}>Each unit = 1 contract of margin (costs fluctuate with price)</div>
         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
           {UNIT_OPTIONS.map(n => {
-            const cost = n * (MARGIN_PER_CONTRACT['MES1!'] || 1000)
+            const avgCost = enabledSymbols.length > 0
+              ? enabledSymbols.reduce((s, f) => s + getMargin(f.symbol, livePrice[f.symbol]), 0) / enabledSymbols.length
+              : getMargin('MES1!', livePrice['MES1!'])
+            const cost = n * avgCost
             return (
               <button
                 key={n}
@@ -91,11 +95,14 @@ export default function LiveTrading() {
         </div>
         {/* Per-symbol margin breakdown */}
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 2 }}>
-          {futures.map(f => (
-            <div key={f.symbol} style={{ fontSize: 10, color: '#6b7280' }}>
-              {f.symbol}: <span style={{ color: '#93c5fd', fontFamily: 'monospace' }}>${((MARGIN_PER_CONTRACT[f.symbol] || 1000) * units).toLocaleString()}</span>
-            </div>
-          ))}
+          {futures.map(f => {
+            const m = getMargin(f.symbol, livePrice[f.symbol])
+            return (
+              <div key={f.symbol} style={{ fontSize: 10, color: '#6b7280' }}>
+                {f.symbol}: <span style={{ color: '#93c5fd', fontFamily: 'monospace' }}>${(m * units).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </div>
+            )
+          })}
         </div>
       </div>
 
@@ -109,7 +116,7 @@ export default function LiveTrading() {
             const price = livePrice[f.symbol]
             const symMax = getMaxForSymbol(f.symbol)
             const selectedMax = symMax === 'infinite' ? '∞' : symMax
-            const margin = MARGIN_PER_CONTRACT[f.symbol] || 1000
+            const margin = getMargin(f.symbol, price)
             return (
               <div key={f.symbol} style={{
                 padding: '10px 12px', borderRadius: 8,
@@ -121,7 +128,7 @@ export default function LiveTrading() {
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 13 }}>
                       {f.symbol}
-                      <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 400, marginLeft: 6 }}>${margin.toLocaleString()}/contract</span>
+                      <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 400, marginLeft: 6 }}>${margin.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/contract</span>
                     </div>
                     <div style={{ fontSize: 10, color: '#6b7280' }}>{f.name}</div>
                     <div style={{ fontFamily: 'monospace', color: '#60a5fa', fontSize: 12, marginTop: 1 }}>
@@ -179,7 +186,7 @@ export default function LiveTrading() {
 
         {masterSwitch && (
           <div style={{ fontSize: 11, color: '#4ade80', background: '#14532d', borderRadius: 6, padding: '6px 10px', textAlign: 'center' }}>
-            Live trading active — {units} unit{units !== 1 ? 's' : ''} per trade on {enabledSymbols.length} symbol{enabledSymbols.length !== 1 ? 's' : ''}
+            Strategy running every 30s — {units} unit{units !== 1 ? 's' : ''} per trade on {enabledSymbols.length} symbol{enabledSymbols.length !== 1 ? 's' : ''}
           </div>
         )}
 

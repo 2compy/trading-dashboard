@@ -290,9 +290,17 @@ export const useStore = create(
         },
       })),
 
-      // --- Master switch ---
+      // --- Master switch (live) ---
       masterSwitch: false,
       toggleMasterSwitch: () => set(state => ({ masterSwitch: !state.masterSwitch })),
+
+      // --- Paper switch ---
+      paperSwitch: false,
+      togglePaperSwitch: () => set(state => ({ paperSwitch: !state.paperSwitch })),
+      paperTrades: [],
+      paperNextId: 1,
+      lastPaperAutoTradeTime: {},
+      lastPaperFiredBosTime: {},
 
       // Tracks when the last auto trade fired per symbol (unix seconds)
       lastAutoTradeTime: {},
@@ -362,6 +370,76 @@ export const useStore = create(
         }
       },
 
+      // Called by the auto-trade interval when paper switch is ON
+      runPaperAutoTrade: () => {
+        const state = get()
+        if (!state.paperSwitch) return
+
+        const settings = state.tradeSettings
+        const units = settings.paperUnits || 1
+        const nowSec = Math.floor(Date.now() / 1000)
+        const COOLDOWN = 60
+
+        let nextId = state.paperNextId
+        const newTrades = []
+        const lastAutoUpdate = {}
+        const bosTimeUpdate = {}
+
+        FUTURES.forEach(f => {
+          if (!state.symbolEnabled[f.symbol]) return
+
+          const lastTime = state.lastPaperAutoTradeTime[f.symbol] || 0
+          if (nowSec - lastTime < COOLDOWN) return
+
+          const result = runStrategy(state.mtfCandles, f.symbol)
+          if (!result) return
+
+          if (state.lastPaperFiredBosTime[f.symbol] === result.bosTime) return
+
+          const price = state.livePrice[f.symbol]
+          const side = result.direction
+
+          newTrades.push({
+            id: nextId++,
+            symbol: f.symbol,
+            side,
+            entryPrice: price,
+            units,
+            entryTime: new Date().toISOString(),
+            status: 'OPEN',
+            exitPrice: null,
+            exitTime: null,
+            pnl: null,
+            auto: true,
+            signal: result.signal,
+            paper: true,
+          })
+          lastAutoUpdate[f.symbol] = nowSec
+          bosTimeUpdate[f.symbol] = result.bosTime
+        })
+
+        if (newTrades.length) {
+          set(s => ({
+            paperTrades: [...newTrades, ...s.paperTrades],
+            paperNextId: nextId,
+            lastPaperAutoTradeTime: { ...s.lastPaperAutoTradeTime, ...lastAutoUpdate },
+            lastPaperFiredBosTime: { ...s.lastPaperFiredBosTime, ...bosTimeUpdate },
+          }))
+        }
+      },
+
+      closePaperTrade: (id) => {
+        const state = get()
+        set({
+          paperTrades: state.paperTrades.map(t => {
+            if (t.id !== id || t.status !== 'OPEN') return t
+            const exitPrice = state.livePrice[t.symbol]
+            const pnl = calcFuturesPnl(t.entryPrice, exitPrice, t.symbol, t.side)
+            return { ...t, status: 'CLOSED', exitPrice, exitTime: new Date().toISOString(), pnl: pnl * (t.units || 1) }
+          })
+        })
+      },
+
       // --- Trades ---
       trades: [],
       nextId: 1,
@@ -416,6 +494,9 @@ export const useStore = create(
         symbolEnabled: state.symbolEnabled,
         symbolSide: state.symbolSide,
         paperSymbolConfig: state.paperSymbolConfig,
+        paperTrades: state.paperTrades,
+        paperNextId: state.paperNextId,
+        paperSwitch: state.paperSwitch,
       }),
     }
   )

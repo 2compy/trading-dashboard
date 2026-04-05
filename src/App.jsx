@@ -27,6 +27,7 @@ export default function App() {
     tickPrice, advanceCandle, pollQuotes, fetchMTFCandles,
     trades, apiError,
     masterSwitch, toggleMasterSwitch, runAutoTrade,
+    paperSwitch, runPaperAutoTrade,
     marketOpen, refreshMarketStatus,
   } = useStore()
 
@@ -71,6 +72,13 @@ export default function App() {
     const interval = setInterval(runAutoTrade, 30000)
     return () => clearInterval(interval)
   }, [masterSwitch])
+
+  // Paper auto-trade every 30s when paper switch is ON
+  useEffect(() => {
+    if (!paperSwitch) return
+    const interval = setInterval(runPaperAutoTrade, 30000)
+    return () => clearInterval(interval)
+  }, [paperSwitch])
 
   const openCount  = trades.filter(t => t.status === 'OPEN').length
   const closed     = trades.filter(t => t.status === 'CLOSED')
