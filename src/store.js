@@ -2,8 +2,8 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 export const FUTURES = [
-  { symbol: 'MES1!', name: 'Micro E-mini S&P 500', base: 5400 },
-  { symbol: 'MNQ1!', name: 'Micro E-mini Nasdaq',  base: 18800 },
+  { symbol: 'MES1!', name: 'Micro E-mini S&P 500', base: 6603.75 },
+  { symbol: 'MNQ1!', name: 'Micro E-mini Nasdaq',  base: 24132.25 },
   { symbol: 'MGC1!', name: 'Micro Gold',            base: 4702.7 },
 ]
 

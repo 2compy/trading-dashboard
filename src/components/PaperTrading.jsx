@@ -6,8 +6,8 @@ const TRADE_LIMIT_OPTIONS = [1, 2, 3, 4, 5, '∞']
 
 // Base margin at reference prices — scales with live price
 const BASE_MARGIN = {
-  'MES1!': { margin: 1650.94, refPrice: 5400 },
-  'MNQ1!': { margin: 2412.80, refPrice: 18800 },
+  'MES1!': { margin: 1650.94, refPrice: 6603.75 },
+  'MNQ1!': { margin: 2412.80, refPrice: 24132.25 },
   'MGC1!': { margin: 2354.10, refPrice: 4700 },
 }
 
