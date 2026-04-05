@@ -1427,12 +1427,11 @@ function runBacktest(candles5m, candles1m, symbol) {
 function runBacktestLong(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
 
-  // Run both long strategies independently
+  // Run ONLY the user's custom long strategy (no IFVG mid retrace — that's a short strategy)
   const sweepTrades = runBacktestSweepBOSLong(candles5m, candles1m || [], symbol, multiplier)
-  const ifvgTrades  = runBacktestIFVGMidLong(candles5m, candles1m || [], symbol, multiplier)
 
-  // Merge and sort by entry time
-  const all = [...sweepTrades, ...ifvgTrades].sort((a, b) => a.time - b.time)
+  // Sort by entry time
+  const all = [...sweepTrades].sort((a, b) => a.time - b.time)
 
   // Aggressive dedup:
   //  1. Exact same entry timestamp = duplicate (drop the second)
@@ -1484,26 +1483,10 @@ export default async function handler(req, res) {
     if (sideParam === 'long') {
       // Long backtest
       if (symbol === 'MGC1!') {
-        // MGC Long: HTF Bias + IFVG Mid Retrace, merged with dedup
-        const htfTrades  = runBacktestMGCLong(candles5m)
-        const ifvgTrades = runBacktestIFVGMidLong(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCLongKillZone)
-
-        const all = [...htfTrades, ...ifvgTrades].sort((a, b) => a.time - b.time)
-        trades = []
-        const usedTimes = new Set()
-        for (const t of all) {
-          if (usedTimes.has(t.time)) continue
-          let dominated = false
-          for (const prev of trades) {
-            const gap = t.time - prev.time
-            if (gap < 600) { dominated = true; break }
-            if (gap < 1200 && t.bias === prev.bias) { dominated = true; break }
-          }
-          if (dominated) continue
-          t.id = trades.length + 1
-          trades.push(t)
-          usedTimes.add(t.time)
-        }
+        // MGC Long: ONLY the user's custom strategy (4H bullish + swing low sweep + displacement + FVG)
+        trades = runBacktestMGCLong(candles5m)
+        // Assign IDs
+        trades.forEach((t, i) => { t.id = i + 1 })
       } else {
         trades = runBacktestLong(candles5m, candles1m, symbol)
       }
