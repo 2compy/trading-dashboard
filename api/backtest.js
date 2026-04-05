@@ -267,6 +267,60 @@ const SL_BOUNDS = {
 }
 const DEFAULT_SL_BOUNDS = { min: 3, max: 60 }
 
+// ── LONG-specific overrides (longs need wider stops, lower RR) ──────────────
+const LONG_SYMBOL_RR = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
+const LONG_FIXED_SL  = { 'MES1!': null, 'MNQ1!': 45, 'MGC1!': 25 }
+const LONG_SL_BOUNDS = {
+  'MES1!': { min: 15, max: 80 },
+  'MNQ1!': { min: 20, max: 120 },
+  'MGC1!': { min: 5, max: 50 },
+}
+// Kill zone for longs: NY session only (8:30am–12pm ET) — highest probability for bullish reversals
+function isLongKillZone(ts) {
+  const mins = getETMinutes(ts)
+  return (mins >= 510 && mins < 720)   // NY open: 8:30 AM–12:00 PM ET
+}
+// MGC longs also get Asia session (8pm–midnight) + NY (8am–noon)
+function isMGCLongKillZone(ts) {
+  const mins = getETMinutes(ts)
+  return (mins >= 1200) ||             // Asia: 8:00 PM – midnight ET
+         (mins >= 480 && mins < 720)   // NY:   8:00 AM – noon ET
+}
+
+// ── SL/TP for LONG strategy (uses long-specific params) ──────────────────────
+function getTPSLLong(bias, entryPrice, sweepWickExtreme, recent5m, symbol) {
+  let slPrice, slDist
+  const fixedSL = LONG_FIXED_SL[symbol]
+
+  if (fixedSL != null) {
+    slDist = fixedSL
+    slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
+  } else {
+    // Sweep wick SL with wider buffer for longs (3pt instead of 2pt)
+    slPrice = bias === 'bullish' ? sweepWickExtreme - 3 : sweepWickExtreme + 3
+    const slBounds = LONG_SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
+    if (bias === 'bullish' && entryPrice - slPrice < slBounds.min) slPrice = entryPrice - slBounds.min
+    if (bias === 'bearish' && slPrice - entryPrice < slBounds.min) slPrice = entryPrice + slBounds.min
+    slDist = Math.abs(entryPrice - slPrice)
+    if (slDist > slBounds.max) return null
+  }
+
+  const rr = LONG_SYMBOL_RR[symbol] || 2
+  const minTPDist = slDist * rr
+  const maxTPDist = minTPDist + 40  // wider search window for longs
+
+  const { highs, lows } = detectSwings(recent5m, 3)
+  let tpPrice
+  if (bias === 'bullish') {
+    const c = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+    tpPrice = c[0]?.price ?? entryPrice + minTPDist
+  } else {
+    const c = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
+    tpPrice = c[0]?.price ?? entryPrice - minTPDist
+  }
+  return { slPrice, tpPrice }
+}
+
 // ── SL/TP for default strategy ────────────────────────────────────────────────
 function getTPSL(bias, entryPrice, sweepWickExtreme, recent5m, symbol) {
   let slPrice, slDist
@@ -480,15 +534,10 @@ function runBacktestMGCLong(candles5m) {
     const bias = trend4h
     if (bias === 'bearish') continue
 
-    // ── TP at nearest 1h swing H/L beyond current price ──────────────────────
+    // ── TP at nearest 1h swing high beyond current price ─────────────────────
     let tpPrice = null
-    if (bias === 'bullish') {
-      const cands = h1h.filter(h => h.price > now5m.close).sort((a, b) => a.price - b.price)
-      tpPrice = cands[0]?.price
-    } else {
-      const cands = l1h.filter(l => l.price < now5m.close).sort((a, b) => b.price - a.price)
-      tpPrice = cands[0]?.price
-    }
+    const cands = h1h.filter(h => h.price > now5m.close).sort((a, b) => a.price - b.price)
+    tpPrice = cands[0]?.price
     if (!tpPrice) continue
 
     // ── 4h FVG check: no open FVG blocking path to TP ────────────────────────
@@ -497,43 +546,40 @@ function runBacktestMGCLong(candles5m) {
     // ── 1h FVG check: no open FVG blocking path to TP ────────────────────────
     if (hasFVGBlocking(recent1h, now5m.close, tpPrice)) continue
 
-    // ── 5m FVG: longs need 5pts wide, shorts need 7pts wide ─────────────────
-    const minFVGWidth = bias === 'bearish' ? 7 : 5
-    const fvgs5m = detectFVGs(recent5m).filter(f => f.type === bias && f.top - f.bottom >= minFVGWidth)
+    // ── 5m FVG: longs need 5pts wide ────────────────────────────────────────
+    const fvgs5m = detectFVGs(recent5m).filter(f => f.type === 'bullish' && f.top - f.bottom >= 5)
     if (!fvgs5m.length) continue
     const fvg5m = fvgs5m[fvgs5m.length - 1]
 
     // ── Entry: retrace to midpoint, but only if it hasn't been touched before ─
-    // If price retraces to the midpoint more than once the FVG is weakened — skip
     const fvgStartIdx = candles5m.findIndex(c => c.time > fvg5m.time)
     if (fvgStartIdx < 0) continue
     const postFVG = candles5m.slice(fvgStartIdx, fvgStartIdx + 50)
 
     let touchCount = 0, inTouch = false, entryCandle = null
     for (const c of postFVG) {
-      const touched = bias === 'bullish' ? c.low <= fvg5m.mid : c.high >= fvg5m.mid
+      const touched = c.low <= fvg5m.mid
       if (touched && !inTouch) {
         touchCount++
         inTouch = true
-        if (touchCount === 1) entryCandle = c  // only enter on the very first touch
+        if (touchCount === 1) entryCandle = c
       } else if (!touched) {
         inTouch = false
       }
     }
-    if (!entryCandle || touchCount > 1) continue  // skip if never touched or touched more than once
-    if (usedFVGs.has(fvg5m.time)) continue        // this FVG already triggered a trade
+    if (!entryCandle || touchCount > 1) continue
+    if (usedFVGs.has(fvg5m.time)) continue
     if (usedEntryTimes.has(entryCandle.time)) continue
     const entryPrice = fvg5m.mid
 
-    // ── SL: $200 risk per contract. MGC multiplier = 10, so 200/10 = 20 points
-    const slPrice = bias === 'bullish' ? entryPrice - 20 : entryPrice + 20
+    // ── SL: wider for longs — 25pt ($250 risk per contract)
+    const slDist = 25
+    const slPrice = entryPrice - slDist
 
-    if (bias === 'bullish' && tpPrice <= entryPrice) continue
-    if (bias === 'bearish' && tpPrice >= entryPrice) continue
+    if (tpPrice <= entryPrice) continue
 
-    const slDist = 20
     const tpDist = Math.abs(tpPrice - entryPrice)
-    if (tpDist / slDist < (SYMBOL_RR['MGC1!'] || MIN_RR)) continue
+    if (tpDist / slDist < (LONG_SYMBOL_RR['MGC1!'] || 2)) continue
 
     // ── Simulate on 5m ───────────────────────────────────────────────────────
     const entryIdx = candles5m.indexOf(entryCandle)
@@ -541,13 +587,8 @@ function runBacktestMGCLong(candles5m) {
     let outcome = null, exitPrice = null, exitTime = null
 
     for (const fc of future5m) {
-      if (bias === 'bullish') {
-        if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
-        if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
-      } else {
-        if (fc.high >= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
-        if (fc.low  <= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
-      }
+      if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
+      if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
     }
 
     if (!outcome) continue
@@ -784,11 +825,13 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
     const now5m    = candles5m[i]
     const recent5m = candles5m.slice(Math.max(0, i - 30), i + 1)
 
-    if (!isKillZone(now5m.time)) continue
+    // LONG: NY session only (highest probability for bullish reversals)
+    if (!isLongKillZone(now5m.time)) continue
     if (now5m.time - lastTradeTime < 600) continue
 
     const pdhl = getPrevDayHL(dailyHL, now5m.time)
 
+    // LONG: only look for bullish sweeps (prev day LOW sweep)
     let sweepBias = null, sweepWickExtreme = null, sweepTime = null
 
     if (pdhl) {
@@ -796,9 +839,6 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
         const c = recent5m[j]
         if (c.low < pdhl.low && c.close > pdhl.low) {
           sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
-        }
-        if (c.high > pdhl.high && c.close < pdhl.high) {
-          sweepBias = 'bearish'; sweepWickExtreme = c.high; sweepTime = c.time; break
         }
       }
     }
@@ -811,25 +851,21 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
           if (c.low < sessionHL.low && c.close > sessionHL.low) {
             sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
           }
-          if (c.high > sessionHL.high && c.close < sessionHL.high) {
-            sweepBias = 'bearish'; sweepWickExtreme = c.high; sweepTime = c.time; break
-          }
         }
       }
     }
     if (!sweepBias) continue
     if (usedSweeps.has(sweepTime)) continue
 
-    // BOS
+    // BOS — must be bullish
     const postSweep5m = recent5m.filter(c => c.time > sweepTime)
     if (postSweep5m.length < 3) continue
     const { highs: h5, lows: l5 } = detectSwings(postSweep5m, 2)
-    const bosList = detectBOS(postSweep5m, h5, l5).filter(b => b.type === sweepBias)
+    const bosList = detectBOS(postSweep5m, h5, l5).filter(b => b.type === 'bullish')
     if (!bosList.length) continue
     const latestBOS = bosList[bosList.length - 1]
 
-    const bias = sweepBias
-    if (bias === 'bearish') continue
+    const bias = 'bullish'
 
     // Entry: try 1M FVG + IFVG, fallback to next 5m candle after BOS
     let entryCandle = null, entryPrice = null, entrySignal = 'Sweep+BOS'
@@ -858,18 +894,17 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
 
     if (usedEntryTimes.has(entryCandle.time)) continue
 
-    // SL/TP
-    const tpsl = getTPSL(bias, entryPrice, sweepWickExtreme, recent5m, symbol)
+    // SL/TP — use long-specific params (2:1 RR, wider SL)
+    const tpsl = getTPSLLong(bias, entryPrice, sweepWickExtreme, recent5m, symbol)
     if (!tpsl) continue
     const { slPrice, tpPrice } = tpsl
 
-    if (bias === 'bullish' && tpPrice <= entryPrice) continue
-    if (bias === 'bearish' && tpPrice >= entryPrice) continue
+    if (tpPrice <= entryPrice) continue
 
     const slDist = Math.abs(entryPrice - slPrice)
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (slDist === 0 || tpDist <= 0) continue
-    if (tpDist / slDist < (SYMBOL_RR[symbol] || MIN_RR)) continue
+    if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 2)) continue
 
     const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
     const future1m   = candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
@@ -1030,7 +1065,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
 }
 
 // ── Strategy B Long: IFVG Midpoint Retrace backtest (long version) ────────────
-function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZoneFn = isKillZone) {
+function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZoneFn = isLongKillZone) {
   const trades = []
 
   if (!candles5m.length) return trades
@@ -1066,38 +1101,32 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
     if (bias === 'bearish') continue
     const entryPrice = ifvg.mid
 
-    // SL: fixed per symbol, or FVG-based for ES
+    // SL: long-specific — wider stops
     let slDist, slPrice
-    const fixedSL = FIXED_SL[symbol]
-    const slBounds = SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
-    if (fixedSL != null) {
-      slDist = fixedSL
+    const fixedSLLong = LONG_FIXED_SL[symbol]
+    const slBoundsLong = LONG_SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
+    if (fixedSLLong != null) {
+      slDist = fixedSLLong
     } else {
-      slDist = Math.abs(entryPrice - (bias === 'bullish' ? ifvg.bottom - 2 : ifvg.top + 2))
-      if (slDist < slBounds.min || slDist > slBounds.max) continue
+      slDist = Math.abs(entryPrice - (ifvg.bottom - 3))  // 3pt buffer for longs
+      if (slDist < slBoundsLong.min || slDist > slBoundsLong.max) continue
     }
-    slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
+    slPrice = entryPrice - slDist
 
-    // TP: dynamic, minimum R:R per symbol
-    const minRR_sym = SYMBOL_RR[symbol] || MIN_RR
+    // TP: dynamic, long-specific 2:1 R:R
+    const minRR_sym = LONG_SYMBOL_RR[symbol] || 2
     const minTPDist = slDist * minRR_sym
-    const maxTPDist = minTPDist + 30
+    const maxTPDist = minTPDist + 40
 
     const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
     const recent5m = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
-    const { highs, lows } = detectSwings(recent5m, 3)
+    const { highs } = detectSwings(recent5m, 3)
 
     let tpPrice
-    if (bias === 'bullish') {
-      const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
-      tpPrice = targets[0]?.price ?? entryPrice + minTPDist
-    } else {
-      const targets = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
-      tpPrice = targets[0]?.price ?? entryPrice - minTPDist
-    }
+    const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+    tpPrice = targets[0]?.price ?? entryPrice + minTPDist
 
-    if (bias === 'bullish' && tpPrice <= entryPrice) continue
-    if (bias === 'bearish' && tpPrice >= entryPrice) continue
+    if (tpPrice <= entryPrice) continue
 
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (tpDist / slDist < minRR_sym) continue
@@ -1110,13 +1139,8 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
     let outcome = null, exitPrice = null, exitTime = null
 
     for (const fc of simCandles) {
-      if (bias === 'bullish') {
-        if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
-        if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
-      } else {
-        if (fc.high >= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
-        if (fc.low  <= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
-      }
+      if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
+      if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
     }
 
     if (!outcome) continue
@@ -1247,7 +1271,7 @@ export default async function handler(req, res) {
       if (symbol === 'MGC1!') {
         // MGC Long: HTF Bias + IFVG Mid Retrace, merged with dedup
         const htfTrades  = runBacktestMGCLong(candles5m)
-        const ifvgTrades = runBacktestIFVGMidLong(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
+        const ifvgTrades = runBacktestIFVGMidLong(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCLongKillZone)
 
         const all = [...htfTrades, ...ifvgTrades].sort((a, b) => a.time - b.time)
         trades = []
