@@ -530,100 +530,113 @@ function runBacktestMGC(candles5m) {
   return trades
 }
 
-// ── MGC1! strategy long: HTF bias + clean 4h/1h + 5m FVG + 5m BOS confirm (long version) ──
+// ── MGC1! strategy long: Sweep Asian lows, bullish displacement, FVG/OB retrace ──
 function runBacktestMGCLong(candles5m) {
   const multiplier = CONTRACT_MULTIPLIER['MGC1!']
   const trades     = []
   if (!candles5m.length) return trades
 
-  const candles1h  = buildHTFCandles(candles5m, 60)
   const candles4h  = buildHTFCandles(candles5m, 240)
   let lastTradeTime = 0
-  const usedFVGs       = new Set()  // one trade per FVG
-  const usedEntryTimes = new Set()  // no duplicate timestamps
+  const usedSweeps     = new Set()
+  const usedEntryTimes = new Set()
 
-  for (let i = 20; i < candles5m.length - 1; i++) {
+  for (let i = 30; i < candles5m.length - 1; i++) {
     const now5m    = candles5m[i]
-    const recent5m = candles5m.slice(Math.max(0, i - 36), i + 1)  // ~3hrs of 5m
+    const recent5m = candles5m.slice(Math.max(0, i - 100), i + 1)  // ~8.3hrs of 5m
 
-    if (!isMGCKillZone(now5m.time)) continue
+    if (!isMGCLongKillZone(now5m.time)) continue
     if (now5m.time - lastTradeTime < 600) continue
 
-    // ── 4h trend direction (required — only trade with the 4h trend) ──────────
+    // ── 1. Check 4H bias is bullish (higher highs) ────────────────────────────
     const now4hIdx = candles4h.findLastIndex(c => c.time <= now5m.time)
-    if (now4hIdx < 5) continue
+    if (now4hIdx < 8) continue
     const recent4h = candles4h.slice(Math.max(0, now4hIdx - 20), now4hIdx + 1)
     const { highs: h4h, lows: l4h } = detectSwings(recent4h, 2)
     const bos4h = detectBOS(recent4h, h4h, l4h)
-    if (!bos4h.length) continue
-    const trend4h = bos4h[bos4h.length - 1].type  // 4h tells us the only allowed direction
+    if (!bos4h.length || bos4h[bos4h.length - 1].type !== 'bullish') continue
 
-    // ── 1h bias must agree with 4h trend ─────────────────────────────────────
-    const now1hIdx = candles1h.findLastIndex(c => c.time <= now5m.time)
-    if (now1hIdx < 10) continue
-    const recent1h = candles1h.slice(Math.max(0, now1hIdx - 20), now1hIdx + 1)
-    const { highs: h1h, lows: l1h } = detectSwings(recent1h, 2)
-    const bos1h = detectBOS(recent1h, h1h, l1h)
-    if (!bos1h.length) continue
-    const bias1h = bos1h[bos1h.length - 1].type
+    // ── 2. Find swing lows on 5m, check if swept (wick below + close above) ────
+    const { highs: h5m, lows: l5m } = detectSwings(recent5m, 2)
+    if (!l5m.length) continue
 
-    // Both timeframes must agree — no counter-trend trades ever
-    if (bias1h !== trend4h) continue
-    const bias = trend4h
-    if (bias === 'bearish') continue
-
-    // ── TP at nearest 1h swing high beyond current price ─────────────────────
-    let tpPrice = null
-    const cands = h1h.filter(h => h.price > now5m.close).sort((a, b) => a.price - b.price)
-    tpPrice = cands[0]?.price
-    if (!tpPrice) continue
-
-    // ── 4h FVG check: no open FVG blocking path to TP ────────────────────────
-    if (hasFVGBlocking(recent4h, now5m.close, tpPrice)) continue
-
-    // ── 1h FVG check: no open FVG blocking path to TP ────────────────────────
-    if (hasFVGBlocking(recent1h, now5m.close, tpPrice)) continue
-
-    // ── 5m FVG: longs need 5pts wide ────────────────────────────────────────
-    const fvgs5m = detectFVGs(recent5m).filter(f => f.type === 'bullish' && f.top - f.bottom >= 5)
-    if (!fvgs5m.length) continue
-    const fvg5m = fvgs5m[fvgs5m.length - 1]
-
-    // ── Entry: retrace to midpoint, but only if it hasn't been touched before ─
-    const fvgStartIdx = candles5m.findIndex(c => c.time > fvg5m.time)
-    if (fvgStartIdx < 0) continue
-    const postFVG = candles5m.slice(fvgStartIdx, fvgStartIdx + 50)
-
-    let touchCount = 0, inTouch = false, entryCandle = null
-    for (const c of postFVG) {
-      const touched = c.low <= fvg5m.mid
-      if (touched && !inTouch) {
-        touchCount++
-        inTouch = true
-        if (touchCount === 1) entryCandle = c
-      } else if (!touched) {
-        inTouch = false
+    let sweepLow = null, sweepCandle = null, sweepWickLow = null
+    for (let j = recent5m.length - 1; j >= 3; j--) {
+      const c = recent5m[j]
+      const lastLow = l5m[l5m.length - 1]
+      // Sweep: wick goes below the swing low, but close is above it
+      if (c.low < lastLow.price && c.close > lastLow.price) {
+        sweepLow = lastLow.price
+        sweepCandle = c
+        sweepWickLow = c.low
+        break
       }
     }
-    if (!entryCandle || touchCount > 1) continue
-    if (usedFVGs.has(fvg5m.time)) continue
-    if (usedEntryTimes.has(entryCandle.time)) continue
-    const entryPrice = fvg5m.mid
+    if (!sweepLow || !sweepCandle) continue
+    if (usedSweeps.has(sweepCandle.time)) continue
 
-    // ── SL: wider for longs — 25pt ($250 risk per contract)
-    const slDist = 25
-    const slPrice = entryPrice - slDist
+    // ── 3. Find bullish displacement candle after sweep ───────────────────────
+    const postSweepIdx = recent5m.indexOf(sweepCandle) + 1
+    const postSweep5m = recent5m.slice(postSweepIdx, Math.min(postSweepIdx + 10, recent5m.length))
+
+    let displaceCandle = null
+    for (const c of postSweep5m) {
+      // Bullish displacement: close > open, body is 60%+ of range
+      if (c.close > c.open) {
+        const range = c.high - c.low
+        const body = c.close - c.open
+        if (range > 0 && body / range >= 0.6) {
+          displaceCandle = c
+          break
+        }
+      }
+    }
+    if (!displaceCandle) continue
+
+    // ── 4. Find bullish FVG from displacement move ────────────────────────────
+    const postDisplace5m = recent5m.slice(recent5m.indexOf(displaceCandle) + 1)
+    const fvgs5m = detectFVGs(postDisplace5m).filter(f => f.type === 'bullish')
+    if (!fvgs5m.length) continue
+    const fvg5m = fvgs5m[0]
+
+    // ── 5. Entry at 50% of FVG when price retraces back ───────────────────────
+    const fvgEntryPrice = fvg5m.mid
+    const fvgStartIdx = candles5m.findIndex(c => c.time > fvg5m.time)
+    if (fvgStartIdx < 0) continue
+    const postFVG = candles5m.slice(fvgStartIdx, fvgStartIdx + 60)
+
+    let entryCandle = null
+    for (const c of postFVG) {
+      if (c.low <= fvgEntryPrice) {
+        entryCandle = c
+        break
+      }
+    }
+    if (!entryCandle) continue
+    if (usedEntryTimes.has(entryCandle.time)) continue
+
+    const entryPrice = fvgEntryPrice
+
+    // ── 6. SL below swept low wick - 3pt buffer ──────────────────────────────
+    const slPrice = sweepWickLow - 3
+
+    // ── 7. TP at previous swing high or equal highs above ─────────────────────
+    const tpCands = h5m.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)
+    if (!tpCands.length) continue
+    const tpPrice = tpCands[0].price
 
     if (tpPrice <= entryPrice) continue
 
+    const slDist = Math.abs(entryPrice - slPrice)
     const tpDist = Math.abs(tpPrice - entryPrice)
+    if (slDist === 0 || tpDist <= 0) continue
     if (tpDist / slDist < (LONG_SYMBOL_RR['MGC1!'] || 1.2)) continue
 
-    // ── Smart long simulation (TP-first, breakeven, time exit) ──────────────
-    const entryIdx = candles5m.indexOf(entryCandle)
-    const future5m = candles5m.slice(entryIdx + 1, entryIdx + 300)
+    // ── Simulate trade ────────────────────────────────────────────────────────
+    const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
+    const future5m = candles5m.slice(entryIdx + 1, entryIdx + 120)
 
-    const simResult = simulateLongTrade(future5m, entryPrice, slPrice, tpPrice, 60)
+    const simResult = simulateLongTrade(future5m, entryPrice, slPrice, tpPrice, 120)
     if (!simResult) continue
 
     const { outcome, exitPrice, exitTime } = simResult
@@ -632,16 +645,16 @@ function runBacktestMGCLong(candles5m) {
     const rr         = parseFloat((tpDist / slDist).toFixed(2))
 
     trades.push({
-      id: trades.length + 1, time: entryCandle.time, exitTime, bias,
+      id: trades.length + 1, time: entryCandle.time, exitTime, bias: 'bullish',
       entryPrice:  parseFloat(entryPrice.toFixed(4)),
       stopPrice:   parseFloat(slPrice.toFixed(4)),
       targetPrice: parseFloat(tpPrice.toFixed(4)),
       exitPrice:   parseFloat(exitPrice.toFixed(4)),
       outcome, pnlDollars: parseFloat(actualPnl.toFixed(2)), rr, contracts: units,
-      signal: 'HTFBias+4h/1hClean+5mFVG+MidRetrace',
+      signal: 'MGC+4hBullish+SweepLow+Displacement+FVG',
     })
 
-    usedFVGs.add(fvg5m.time)
+    usedSweeps.add(sweepCandle.time)
     usedEntryTimes.add(entryCandle.time)
     lastTradeTime = now5m.time
   }
@@ -843,132 +856,314 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
   return trades
 }
 
-// ── Strategy A Long: Sweep + BOS backtest (long version) ──────────────────────
+// ── MNQ/MES Long: Sweep + Bullish Displacement + FVG/OB Entry ──────────────────
 function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
   const trades = []
   if (!candles5m.length) return trades
 
+  const candles4h = buildHTFCandles(candles5m, 240)
   const dailyHL = buildDailyHL(candles5m)
   const sessionIndex = buildSessionHLIndex(candles5m)
   let lastTradeTime = 0
   const usedSweeps     = new Set()
   const usedEntryTimes = new Set()
 
-  for (let i = 20; i < candles5m.length - 1; i++) {
+  for (let i = 30; i < candles5m.length - 1; i++) {
     const now5m    = candles5m[i]
-    const recent5m = candles5m.slice(Math.max(0, i - 30), i + 1)
+    const nowMins  = getETMinutes(now5m.time)
+    const recent5m = candles5m.slice(Math.max(0, i - 100), i + 1)  // ~8.3hrs
 
-    // LONG: NY session only (highest probability for bullish reversals)
-    if (!isLongKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 600) continue
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MNQ1! — Micro Nasdaq Longs
+    // ═══════════════════════════════════════════════════════════════════════════
+    if (symbol === 'MNQ1!') {
+      // Kill zone: 8:30-10 AM for sweep detection; Silver Bullet 10-11 AM for entries
+      if (!(nowMins >= 510 && nowMins < 660)) continue  // 8:30am-11am window
+      if (now5m.time - lastTradeTime < 600) continue
 
-    const pdhl = getPrevDayHL(dailyHL, now5m.time)
+      // 1. Check 4H bullish structure (higher highs)
+      const now4hIdx = candles4h.findLastIndex(c => c.time <= now5m.time)
+      if (now4hIdx < 5) continue
+      const recent4h = candles4h.slice(Math.max(0, now4hIdx - 20), now4hIdx + 1)
+      const { highs: h4h, lows: l4h } = detectSwings(recent4h, 2)
+      const bos4h = detectBOS(recent4h, h4h, l4h)
+      if (!bos4h.length || bos4h[bos4h.length - 1].type !== 'bullish') continue
 
-    // LONG: only look for bullish sweeps (prev day LOW sweep)
-    let sweepBias = null, sweepWickExtreme = null, sweepTime = null
+      // 2. Find equal lows or swing lows, check if swept
+      const { lows: l5m } = detectSwings(recent5m, 2)
+      if (!l5m.length) continue
 
-    if (pdhl) {
-      for (let j = recent5m.length - 1; j >= 0; j--) {
+      let sweepLow = null, sweepCandle = null, sweepWickLow = null
+      for (let j = recent5m.length - 1; j >= 3; j--) {
         const c = recent5m[j]
-        if (c.low < pdhl.low && c.close > pdhl.low) {
-          sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
+        const lastLow = l5m[l5m.length - 1]
+        // Look for equal lows (within 10 pts for MNQ) or swing low sweep
+        if (c.low < lastLow.price && c.close > lastLow.price) {
+          sweepLow = lastLow.price
+          sweepCandle = c
+          sweepWickLow = c.low
+          break
         }
       }
-    }
+      if (!sweepLow || !sweepCandle) continue
+      if (usedSweeps.has(sweepCandle.time)) continue
 
-    if (!sweepBias) {
-      const sessionHL = getSessionHLFromIndex(sessionIndex, now5m.time)
-      if (sessionHL) {
-        for (let j = recent5m.length - 1; j >= 0; j--) {
-          const c = recent5m[j]
-          if (c.low < sessionHL.low && c.close > sessionHL.low) {
-            sweepBias = 'bullish'; sweepWickExtreme = c.low; sweepTime = c.time; break
+      // 3. Find bullish displacement candle after sweep
+      const postSweepIdx = recent5m.indexOf(sweepCandle) + 1
+      const postSweep5m = recent5m.slice(postSweepIdx, Math.min(postSweepIdx + 10, recent5m.length))
+
+      let displaceCandle = null
+      for (const c of postSweep5m) {
+        if (c.close > c.open) {
+          const range = c.high - c.low
+          const body = c.close - c.open
+          if (range > 0 && body / range >= 0.6) {
+            displaceCandle = c
+            break
           }
         }
       }
-    }
-    if (!sweepBias) continue
-    if (usedSweeps.has(sweepTime)) continue
+      if (!displaceCandle) continue
 
-    // BOS — must be bullish
-    const postSweep5m = recent5m.filter(c => c.time > sweepTime)
-    if (postSweep5m.length < 3) continue
-    const { highs: h5, lows: l5 } = detectSwings(postSweep5m, 2)
-    const bosList = detectBOS(postSweep5m, h5, l5).filter(b => b.type === 'bullish')
-    if (!bosList.length) continue
-    const latestBOS = bosList[bosList.length - 1]
+      // 4. Find bullish FVG from displacement
+      const postDisplace5m = recent5m.slice(recent5m.indexOf(displaceCandle) + 1)
+      const fvgs5m = detectFVGs(postDisplace5m).filter(f => f.type === 'bullish')
+      if (!fvgs5m.length) continue
+      const fvg5m = fvgs5m[0]
 
-    const bias = 'bullish'
+      // 5. Entry at 50% FVG retrace
+      const entryPrice = fvg5m.mid
+      const fvgStartIdx = candles5m.findIndex(c => c.time > fvg5m.time)
+      if (fvgStartIdx < 0) continue
+      const postFVG = candles5m.slice(fvgStartIdx, fvgStartIdx + 60)
 
-    // Entry: try 1M FVG + IFVG, fallback to next 5m candle after BOS
-    let entryCandle = null, entryPrice = null, entrySignal = 'Sweep+BOS'
-
-    const m1After = candles1m.filter(c => c.time >= latestBOS.time && c.time <= now5m.time + 300)
-    if (m1After.length >= 5) {
-      const fvgs1m = detectFVGs(m1After).filter(f => f.type === bias && f.top - f.bottom >= 3)
-      if (fvgs1m.length) {
-        const fvg1m     = fvgs1m[fvgs1m.length - 1]
-        const m1PostFVG = m1After.filter(c => c.time > fvg1m.time)
-        const ifvgEntry = findIFVGEntry(m1PostFVG, fvg1m, bias)
-        if (ifvgEntry) {
-          entryCandle = ifvgEntry
-          entryPrice  = ifvgEntry.close
-          entrySignal = 'Sweep+BOS+1mIFVG'
+      let entryCandle = null
+      for (const c of postFVG) {
+        if (c.low <= entryPrice && nowMins >= 600 && nowMins < 660) {  // Silver Bullet 10-11am
+          entryCandle = c
+          break
         }
       }
-    }
-
-    if (!entryCandle) {
-      const bosIdx = candles5m.findIndex(c => c.time >= latestBOS.time)
-      entryCandle  = bosIdx >= 0 ? candles5m[bosIdx + 1] : null
       if (!entryCandle) continue
-      entryPrice = entryCandle.open
+      if (usedEntryTimes.has(entryCandle.time)) continue
+
+      // 6. SL below sweep wick - 3pt
+      const slPrice = sweepWickLow - 3
+
+      // 7. TP at equal highs or prev session high
+      const { highs: h5m } = detectSwings(recent5m, 2)
+      const tpCands = h5m.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)
+      if (!tpCands.length) continue
+      const tpPrice = tpCands[0].price
+
+      if (tpPrice <= entryPrice) continue
+
+      const slDist = Math.abs(entryPrice - slPrice)
+      const tpDist = Math.abs(tpPrice - entryPrice)
+      if (slDist === 0 || tpDist <= 0) continue
+      if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 1.2)) continue
+
+      // Simulate on 1m data if available
+      const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
+      const future1m = candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
+      const entryIdx5m = candles5m.findIndex(c => c.time >= entryCandle.time)
+      const simCandles = future1m.length > 0 ? future1m : candles5m.slice(entryIdx5m + 1, entryIdx5m + 200)
+
+      const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+      if (!simResult) continue
+
+      const { outcome, exitPrice, exitTime } = simResult
+      const actualPnl = (exitPrice - entryPrice) * multiplier * (UNITS[symbol] || 1)
+
+      trades.push({
+        time:        entryCandle.time,
+        exitTime,
+        bias:        'bullish',
+        entryPrice:  parseFloat(entryPrice.toFixed(4)),
+        stopPrice:   parseFloat(slPrice.toFixed(4)),
+        targetPrice: parseFloat(tpPrice.toFixed(4)),
+        exitPrice:   parseFloat(exitPrice.toFixed(4)),
+        outcome,
+        pnlDollars:  parseFloat(actualPnl.toFixed(2)),
+        contracts:   UNITS[symbol] || 1,
+        rr:          parseFloat((tpDist / slDist).toFixed(2)),
+        signal:      'MNQ+4hBullish+Sweep+Displacement+FVG',
+      })
+
+      usedSweeps.add(sweepCandle.time)
+      usedEntryTimes.add(entryCandle.time)
+      lastTradeTime = now5m.time
     }
 
-    if (usedEntryTimes.has(entryCandle.time)) continue
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MES1! — Micro S&P Longs
+    // ═══════════════════════════════════════════════════════════════════════════
+    else if (symbol === 'MES1!') {
+      // Kill zone: 8:30-9:30 AM (510-570 mins)
+      if (!(nowMins >= 510 && nowMins < 570)) continue
+      if (now5m.time - lastTradeTime < 600) continue
 
-    // SL/TP — use long-specific params (2:1 RR, wider SL)
-    const tpsl = getTPSLLong(bias, entryPrice, sweepWickExtreme, recent5m, symbol)
-    if (!tpsl) continue
-    const { slPrice, tpPrice } = tpsl
+      // 1. Bias check: 1H uptrend OR prev day closed bullish
+      const now1hIdx = buildHTFCandles(candles5m, 60).findLastIndex(c => c.time <= now5m.time)
+      let uptrend = false
+      if (now1hIdx >= 5) {
+        const recent1h = buildHTFCandles(candles5m, 60).slice(Math.max(0, now1hIdx - 10), now1hIdx + 1)
+        const { highs: h1h, lows: l1h } = detectSwings(recent1h, 2)
+        const bos1h = detectBOS(recent1h, h1h, l1h)
+        if (bos1h.length && bos1h[bos1h.length - 1].type === 'bullish') uptrend = true
+      }
 
-    if (tpPrice <= entryPrice) continue
+      const pdhl = getPrevDayHL(dailyHL, now5m.time)
+      let prevDayBullish = false
+      if (pdhl) {
+        // Find the prev day's open and close
+        const prevDayDate = pdhl.date
+        const prevDayCandles = recent5m.filter(c => getETDateStr(c.time) === prevDayDate)
+        if (prevDayCandles.length > 0) {
+          const pdOpen = prevDayCandles[0].open
+          const pdClose = prevDayCandles[prevDayCandles.length - 1].close
+          prevDayBullish = pdClose > pdOpen
+        }
+      }
 
-    const slDist = Math.abs(entryPrice - slPrice)
-    const tpDist = Math.abs(tpPrice - entryPrice)
-    if (slDist === 0 || tpDist <= 0) continue
-    if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 1.2)) continue
+      if (!uptrend && !prevDayBullish) continue
 
-    const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
-    const future1m   = candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
-    const entryIdx5m = candles5m.findIndex(c => c.time >= entryCandle.time)
-    const simCandles = future1m.length > 0 ? future1m : candles5m.slice(entryIdx5m + 1, entryIdx5m + 200)
+      // 2. Mark prev day low and Asian session low as liquidity targets
+      let sweepLow = null, sweepCandle = null, sweepWickLow = null
+      if (pdhl) {
+        // Try to sweep prev day low
+        for (let j = recent5m.length - 1; j >= 3; j--) {
+          const c = recent5m[j]
+          if (c.low < pdhl.low && c.close > pdhl.low) {
+            sweepLow = pdhl.low
+            sweepCandle = c
+            sweepWickLow = c.low
+            break
+          }
+        }
+      }
 
-    // Use smart long simulation (TP-first, breakeven, time exit)
-    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
-    if (!simResult) continue
+      // If no prev day sweep, try session low (Asian low)
+      if (!sweepLow) {
+        const sessionHL = getSessionHLFromIndex(sessionIndex, now5m.time)
+        if (sessionHL) {
+          for (let j = recent5m.length - 1; j >= 3; j--) {
+            const c = recent5m[j]
+            if (c.low < sessionHL.low && c.close > sessionHL.low) {
+              sweepLow = sessionHL.low
+              sweepCandle = c
+              sweepWickLow = c.low
+              break
+            }
+          }
+        }
+      }
 
-    const { outcome, exitPrice, exitTime } = simResult
-    const actualPnl = (exitPrice - entryPrice) * multiplier * (UNITS[symbol] || 1)
+      if (!sweepLow || !sweepCandle) continue
+      if (usedSweeps.has(sweepCandle.time)) continue
 
-    trades.push({
-      time:        entryCandle.time,
-      exitTime,
-      bias,
-      entryPrice:  parseFloat(entryPrice.toFixed(4)),
-      stopPrice:   parseFloat(slPrice.toFixed(4)),
-      targetPrice: parseFloat(tpPrice.toFixed(4)),
-      exitPrice:   parseFloat(exitPrice.toFixed(4)),
-      outcome,
-      pnlDollars:  parseFloat(actualPnl.toFixed(2)),
-      contracts:   UNITS[symbol] || 1,
-      rr:          parseFloat((tpDist / slDist).toFixed(2)),
-      signal:      entrySignal,
-    })
+      // 3. Look for bullish market structure shift on 5m
+      const postSweep5m = recent5m.filter(c => c.time > sweepCandle.time)
+      if (postSweep5m.length < 3) continue
+      const { highs: h5, lows: l5 } = detectSwings(postSweep5m, 2)
+      const bosList = detectBOS(postSweep5m, h5, l5).filter(b => b.type === 'bullish')
+      if (!bosList.length) continue
 
-    usedSweeps.add(sweepTime)
-    usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = now5m.time
+      // 4. Find last bearish candle before bullish push = Order Block
+      const postSweepIdx = recent5m.indexOf(sweepCandle)
+      let obCandle = null
+      for (let j = postSweepIdx + 1; j < recent5m.length; j++) {
+        const c = recent5m[j]
+        if (c.close < c.open) {  // bearish (red) candle
+          obCandle = c
+        } else if (c.close > c.open && obCandle) {
+          // Found bullish after bearish — OB is confirmed
+          break
+        }
+      }
+      if (!obCandle) continue
+
+      // 5. Entry on retest of OB (when price comes back down to OB top = open of bearish candle)
+      const obTop = Math.max(obCandle.open, obCandle.close)
+      const entryPrice = obTop
+      const obIdx = recent5m.indexOf(obCandle)
+      const postOB = recent5m.slice(obIdx + 1)
+
+      let entryCandle = null
+      for (const c of postOB) {
+        if (c.low <= entryPrice && c.close > entryPrice) {
+          entryCandle = c
+          break
+        }
+      }
+
+      // Fallback: if no clean retrace found in recent5m, search forward in full candles5m
+      if (!entryCandle) {
+        const entryOBIdx = candles5m.findIndex(c => c.time >= obCandle.time)
+        const postOBFull = candles5m.slice(entryOBIdx + 1, entryOBIdx + 40)
+        for (const c of postOBFull) {
+          if (c.low <= entryPrice && c.close > entryPrice) {
+            entryCandle = c
+            break
+          }
+        }
+      }
+
+      if (!entryCandle) continue
+      if (usedEntryTimes.has(entryCandle.time)) continue
+
+      // 6. SL below sweep wick - 3pt
+      const slPrice = sweepWickLow - 3
+
+      // 7. TP at prev day high
+      let tpPrice = null
+      if (pdhl) {
+        tpPrice = pdhl.high
+      } else {
+        // Fallback to next swing high
+        const { highs: h5m } = detectSwings(recent5m, 2)
+        const tpCands = h5m.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)
+        tpPrice = tpCands[0]?.price
+      }
+
+      if (!tpPrice || tpPrice <= entryPrice) continue
+
+      const slDist = Math.abs(entryPrice - slPrice)
+      const tpDist = Math.abs(tpPrice - entryPrice)
+      if (slDist === 0 || tpDist <= 0) continue
+      if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 1.2)) continue
+
+      // Simulate trade
+      const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
+      const future1m = candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
+      const entryIdx5m = candles5m.findIndex(c => c.time >= entryCandle.time)
+      const simCandles = future1m.length > 0 ? future1m : candles5m.slice(entryIdx5m + 1, entryIdx5m + 200)
+
+      const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+      if (!simResult) continue
+
+      const { outcome, exitPrice, exitTime } = simResult
+      const actualPnl = (exitPrice - entryPrice) * multiplier * (UNITS[symbol] || 1)
+
+      trades.push({
+        time:        entryCandle.time,
+        exitTime,
+        bias:        'bullish',
+        entryPrice:  parseFloat(entryPrice.toFixed(4)),
+        stopPrice:   parseFloat(slPrice.toFixed(4)),
+        targetPrice: parseFloat(tpPrice.toFixed(4)),
+        exitPrice:   parseFloat(exitPrice.toFixed(4)),
+        outcome,
+        pnlDollars:  parseFloat(actualPnl.toFixed(2)),
+        contracts:   UNITS[symbol] || 1,
+        rr:          parseFloat((tpDist / slDist).toFixed(2)),
+        signal:      'MES+BiasCheck+Sweep+OB+TP',
+      })
+
+      usedSweeps.add(sweepCandle.time)
+      usedEntryTimes.add(entryCandle.time)
+      lastTradeTime = now5m.time
+    }
   }
 
   return trades
