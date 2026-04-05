@@ -7,7 +7,7 @@ const TRADE_LIMIT_OPTIONS = [1, 2, 3, 4, 5, '∞']
 const BASE_MARGIN = {
   'MES1!': { margin: 1650.94, refPrice: 5400 },
   'MNQ1!': { margin: 2412.80, refPrice: 18800 },
-  'MGC1!': { margin: 2354.10, refPrice: 3100 },
+  'MGC1!': { margin: 2354.10, refPrice: 4700 },
 }
 
 function getMargin(symbol, livePrice) {
