@@ -1,5 +1,6 @@
-import { useStore, calcFuturesPnl } from '../store'
-import PnLList from './PnLList'
+import { useState } from 'react'
+import { useStore } from '../store'
+import { calcFuturesPnl, CONTRACT_MULTIPLIER } from '../utils/strategy'
 
 function StatCard({ label, value, color }) {
   return (
@@ -10,108 +11,67 @@ function StatCard({ label, value, color }) {
   )
 }
 
-function PnlBar({ label, pnl, max }) {
-  const pct = Math.min(100, Math.abs(pnl / max) * 100)
-  return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-        <span style={{ color: '#9ca3af' }}>{label}</span>
-        <span style={{ color: pnl >= 0 ? '#4ade80' : '#f87171', fontFamily: 'monospace' }}>
-          {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
-        </span>
-      </div>
-      <div style={{ height: 4, background: '#1f2937', borderRadius: 4, overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${pct}%`, background: pnl >= 0 ? '#22c55e' : '#ef4444', borderRadius: 4 }} />
-      </div>
-    </div>
-  )
-}
-
-export default function Portfolio() {
-  const { futures, trades, livePrice, priceChange } = useStore()
+function Section({ title, color, trades, livePrice, futures }) {
   const open = trades.filter(t => t.status === 'OPEN')
   const closed = trades.filter(t => t.status === 'CLOSED')
-
-  const totalInvested = open.reduce((s, t) => s + t.amount, 0)
   const totalPnl = closed.reduce((s, t) => s + (t.pnl || 0), 0)
   const unrealizedPnl = open.reduce((s, t) => {
     const current = livePrice[t.symbol] || t.entryPrice
-    return s + calcFuturesPnl(t.entryPrice, current, t.symbol, t.side)
+    const mult = CONTRACT_MULTIPLIER[t.symbol] || 5
+    const dir = t.side === 'LONG' ? 1 : -1
+    return s + (current - t.entryPrice) * mult * dir * (t.units || 1)
   }, 0)
-
-  const wins = closed.filter(t => t.pnl > 0).length
+  const wins = closed.filter(t => (t.pnl || 0) > 0).length
+  const losses = closed.length - wins
   const winRate = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '0.0'
   const avgWin = wins > 0 ? closed.filter(t => t.pnl > 0).reduce((s, t) => s + t.pnl, 0) / wins : 0
-  const avgLoss = (closed.length - wins) > 0
-    ? closed.filter(t => t.pnl <= 0).reduce((s, t) => s + t.pnl, 0) / (closed.length - wins)
-    : 0
-
-  const bySymbol = futures.map(f => {
-    const symOpen = open.filter(t => t.symbol === f.symbol)
-    const symClosed = closed.filter(t => t.symbol === f.symbol)
-    const symUnr = symOpen.reduce((s, t) => {
-      const current = livePrice[t.symbol] || t.entryPrice
-      return s + calcFuturesPnl(t.entryPrice, current, t.symbol, t.side)
-    }, 0)
-    const symReal = symClosed.reduce((s, t) => s + (t.pnl || 0), 0)
-    return { ...f, symOpen, symClosed, symUnr, symReal }
-  })
-
-  const maxPnl = Math.max(...closed.map(t => Math.abs(t.pnl || 0)), 1)
+  const avgLoss = losses > 0 ? closed.filter(t => (t.pnl || 0) <= 0).reduce((s, t) => s + (t.pnl || 0), 0) / losses : 0
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Top stats */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ fontWeight: 800, fontSize: 16, color, borderBottom: `2px solid ${color}`, paddingBottom: 6 }}>{title}</div>
+
       <div className="grid-4">
-        <StatCard label="Open Positions" value={open.length} color="#60a5fa" />
-        <StatCard label="Capital Deployed" value={`$${totalInvested.toFixed(2)}`} />
-        <StatCard label="Unrealized P&L" value={`$${unrealizedPnl.toFixed(2)}`} color={unrealizedPnl >= 0 ? '#4ade80' : '#f87171'} />
-        <StatCard label="Realized P&L" value={`$${totalPnl.toFixed(2)}`} color={totalPnl >= 0 ? '#4ade80' : '#f87171'} />
+        <StatCard label="Open" value={open.length} color="#60a5fa" />
+        <StatCard label="Unrealized" value={`$${unrealizedPnl.toFixed(2)}`} color={unrealizedPnl >= 0 ? '#4ade80' : '#f87171'} />
+        <StatCard label="Realized" value={`$${totalPnl.toFixed(2)}`} color={totalPnl >= 0 ? '#4ade80' : '#f87171'} />
+        <StatCard label="Win Rate" value={`${winRate}%`} color={parseFloat(winRate) >= 50 ? '#4ade80' : '#f87171'} />
       </div>
 
       <div className="grid-2">
-        {/* Performance */}
         <div className="card">
-          <div style={{ fontWeight: 600, marginBottom: 14 }}>Performance</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 16 }}>
+          <div style={{ fontWeight: 600, marginBottom: 10 }}>Performance</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
             {[
-              { label: 'Win Rate', value: `${winRate}%`, color: parseFloat(winRate) >= 50 ? '#4ade80' : '#f87171' },
+              { label: 'Wins', value: wins, color: '#4ade80' },
+              { label: 'Losses', value: losses, color: '#f87171' },
               { label: 'Avg Win', value: `$${avgWin.toFixed(2)}`, color: '#4ade80' },
-              { label: 'Avg Loss', value: `$${avgLoss.toFixed(2)}`, color: '#f87171' },
             ].map(s => (
-              <div key={s.label} style={{ background: '#1f2937', borderRadius: 8, padding: '10px', textAlign: 'center' }}>
-                <div style={{ fontSize: 11, color: '#6b7280' }}>{s.label}</div>
-                <div style={{ fontWeight: 700, fontSize: 16, marginTop: 4, color: s.color }}>{s.value}</div>
+              <div key={s.label} style={{ background: '#1f2937', borderRadius: 8, padding: 8, textAlign: 'center' }}>
+                <div style={{ fontSize: 10, color: '#6b7280' }}>{s.label}</div>
+                <div style={{ fontWeight: 700, fontSize: 15, marginTop: 2, color: s.color }}>{s.value}</div>
               </div>
             ))}
           </div>
-          {closed.length > 0 && closed.slice(0, 6).map(t => (
-            <PnlBar key={t.id} label={`#${t.id} ${t.symbol} ${t.side}`} pnl={t.pnl} max={maxPnl} />
-          ))}
-          {closed.length === 0 && (
-            <div style={{ textAlign: 'center', color: '#374151', padding: '20px 0', fontSize: 13 }}>No closed trades yet</div>
-          )}
         </div>
 
-        {/* Market overview */}
         <div className="card">
-          <div style={{ fontWeight: 600, marginBottom: 14 }}>Market Overview</div>
+          <div style={{ fontWeight: 600, marginBottom: 10 }}>By Symbol</div>
           {futures.map(f => {
-            const change = priceChange[f.symbol]
-            const isUp = change >= 0
+            const symClosed = closed.filter(t => t.symbol === f.symbol)
+            const symWins = symClosed.filter(t => (t.pnl || 0) > 0).length
+            const symPnl = symClosed.reduce((s, t) => s + (t.pnl || 0), 0)
+            const symWR = symClosed.length > 0 ? ((symWins / symClosed.length) * 100).toFixed(0) : null
             return (
-              <div key={f.symbol} style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                padding: '10px 0', borderBottom: '1px solid #1f2937',
-              }}>
+              <div key={f.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #1f2937' }}>
                 <div>
-                  <span style={{ fontWeight: 700, fontSize: 14 }}>{f.symbol}</span>
-                  <span style={{ color: '#6b7280', fontSize: 11, marginLeft: 8 }}>{f.name}</span>
+                  <span style={{ fontWeight: 700, fontSize: 12 }}>{f.symbol}</span>
+                  <span style={{ fontSize: 10, color: '#6b7280', marginLeft: 6 }}>{symClosed.length} trades</span>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <span style={{ fontFamily: 'monospace', fontSize: 14 }}>{livePrice[f.symbol]?.toFixed(2)}</span>
-                  <span style={{ fontSize: 12, marginLeft: 8, color: isUp ? '#4ade80' : '#f87171' }}>
-                    {isUp ? '+' : ''}{change.toFixed(2)}
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {symWR && <span style={{ fontSize: 11, fontWeight: 700, color: parseInt(symWR) >= 50 ? '#4ade80' : '#f87171' }}>{symWR}%</span>}
+                  <span style={{ fontSize: 11, fontWeight: 700, fontFamily: 'monospace', color: symPnl >= 0 ? '#4ade80' : '#f87171' }}>
+                    {symPnl >= 0 ? '+' : ''}${symPnl.toFixed(2)}
                   </span>
                 </div>
               </div>
@@ -120,37 +80,68 @@ export default function Portfolio() {
         </div>
       </div>
 
-      {/* Symbol breakdown */}
-      <div>
-        <div style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>
-          Symbol Breakdown
-        </div>
-        <div className="grid-3">
-          {bySymbol.map(f => (
-            <div key={f.symbol} className="card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-                <span style={{ fontWeight: 700 }}>{f.symbol}</span>
-                <span style={{ fontSize: 11, color: '#6b7280' }}>{f.symOpen.length} open · {f.symClosed.length} closed</span>
+      {/* Recent closed trades */}
+      {closed.length > 0 && (
+        <div className="card">
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Recent Trades</div>
+          {closed.slice(-8).reverse().map(t => (
+            <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid #111827', fontSize: 12 }}>
+              <div>
+                <span style={{ fontWeight: 700 }}>{t.symbol}</span>
+                <span style={{ color: '#6b7280', marginLeft: 6 }}>{t.side} {t.units || 1}u</span>
+                {t.signal && <span style={{ fontSize: 9, color: '#fbbf24', marginLeft: 6 }}>{t.signal}</span>}
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
-                <span style={{ color: '#6b7280' }}>Unrealized</span>
-                <span style={{ fontFamily: 'monospace', color: f.symUnr >= 0 ? '#4ade80' : '#f87171' }}>
-                  {f.symUnr >= 0 ? '+' : ''}${f.symUnr.toFixed(2)}
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-                <span style={{ color: '#6b7280' }}>Realized</span>
-                <span style={{ fontFamily: 'monospace', color: f.symReal >= 0 ? '#4ade80' : '#f87171' }}>
-                  {f.symReal >= 0 ? '+' : ''}${f.symReal.toFixed(2)}
-                </span>
-              </div>
+              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: (t.pnl || 0) >= 0 ? '#4ade80' : '#f87171' }}>
+                {(t.pnl || 0) >= 0 ? '+' : ''}${(t.pnl || 0).toFixed(2)}
+              </span>
             </div>
           ))}
         </div>
+      )}
+    </div>
+  )
+}
+
+export default function Portfolio() {
+  const { futures, trades, paperTrades, livePrice, priceChange } = useStore()
+  const [view, setView] = useState('live')
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Toggle */}
+      <div style={{ display: 'flex', gap: 4, background: '#111827', borderRadius: 10, padding: 4, alignSelf: 'flex-start' }}>
+        {[
+          { id: 'live', label: 'Live', color: '#4ade80' },
+          { id: 'paper', label: 'Paper', color: '#fbbf24' },
+        ].map(t => (
+          <button key={t.id} onClick={() => setView(t.id)} style={{
+            padding: '8px 24px', borderRadius: 8, border: 'none',
+            background: view === t.id ? (t.id === 'live' ? '#14532d' : '#451a03') : 'transparent',
+            color: view === t.id ? t.color : '#6b7280',
+            fontWeight: 700, fontSize: 13, cursor: 'pointer', transition: 'all 0.15s',
+          }}>
+            {t.label}
+          </button>
+        ))}
       </div>
 
-      {/* P&L List */}
-      <PnLList />
+      {/* Market overview */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {futures.map(f => {
+          const change = priceChange[f.symbol]
+          const isUp = change >= 0
+          return (
+            <div key={f.symbol} style={{ flex: 1, minWidth: 140, background: '#0f172a', borderRadius: 8, padding: '8px 12px', border: '1px solid #1f2937' }}>
+              <div style={{ fontWeight: 700, fontSize: 12 }}>{f.symbol}</div>
+              <div style={{ fontFamily: 'monospace', fontSize: 14, marginTop: 2 }}>{livePrice[f.symbol]?.toFixed(2)}</div>
+              <div style={{ fontSize: 11, color: isUp ? '#4ade80' : '#f87171' }}>{isUp ? '+' : ''}{change?.toFixed(2)}</div>
+            </div>
+          )
+        })}
+      </div>
+
+      {view === 'live' && <Section title="Live Portfolio" color="#4ade80" trades={trades} livePrice={livePrice} futures={futures} />}
+      {view === 'paper' && <Section title="Paper Portfolio" color="#fbbf24" trades={paperTrades || []} livePrice={livePrice} futures={futures} />}
     </div>
   )
 }
