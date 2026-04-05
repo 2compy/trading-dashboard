@@ -6,7 +6,7 @@ const TRADE_LIMIT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 export default function LiveTrading() {
   const {
     futures, livePrice, tradeSettings, updateTradeSetting,
-    symbolEnabled, toggleSymbol, symbolSide, setSymbolSide,
+    symbolEnabled, toggleSymbol,
     enterTrade, trades, masterSwitch, toggleMasterSwitch,
   } = useStore()
 
@@ -102,7 +102,6 @@ export default function LiveTrading() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {futures.map(f => {
             const enabled = symbolEnabled[f.symbol]
-            const side = symbolSide[f.symbol]
             const open = openTrades.filter(t => t.symbol === f.symbol).length
             const price = livePrice[f.symbol]
             return (
@@ -122,18 +121,6 @@ export default function LiveTrading() {
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                  <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid #374151' }}>
-                    {['LONG', 'SHORT'].map(s => (
-                      <button key={s} onClick={() => setSymbolSide(f.symbol, s)} style={{
-                        padding: '4px 9px', fontSize: 10, fontWeight: 700, border: 'none',
-                        background: side === s ? (s === 'LONG' ? '#16a34a' : '#dc2626') : '#1f2937',
-                        color: side === s ? '#fff' : '#6b7280',
-                        cursor: 'pointer', transition: 'all 0.15s',
-                      }}>
-                        {s}
-                      </button>
-                    ))}
-                  </div>
                   <button
                     onClick={() => toggleSymbol(f.symbol)}
                     style={{

@@ -268,6 +268,8 @@ export const useStore = create(
       },
       symbolEnabled: Object.fromEntries(FUTURES.map(f => [f.symbol, true])),
       symbolSide:    Object.fromEntries(FUTURES.map(f => [f.symbol, 'LONG'])),
+      // Per-symbol paper trading config (units + amount)
+      paperSymbolConfig: Object.fromEntries(FUTURES.map(f => [f.symbol, { units: 1, amount: 1000 }])),
 
       updateTradeSetting: (field, value) => set(state => ({
         tradeSettings: { ...state.tradeSettings, [field]: value },
@@ -279,6 +281,13 @@ export const useStore = create(
 
       setSymbolSide: (symbol, side) => set(state => ({
         symbolSide: { ...state.symbolSide, [symbol]: side },
+      })),
+
+      updatePaperSymbolConfig: (symbol, field, value) => set(state => ({
+        paperSymbolConfig: {
+          ...state.paperSymbolConfig,
+          [symbol]: { ...state.paperSymbolConfig[symbol], [field]: value },
+        },
       })),
 
       // --- Master switch ---
@@ -406,6 +415,7 @@ export const useStore = create(
         tradeSettings: state.tradeSettings,
         symbolEnabled: state.symbolEnabled,
         symbolSide: state.symbolSide,
+        paperSymbolConfig: state.paperSymbolConfig,
       }),
     }
   )
