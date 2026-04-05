@@ -115,28 +115,6 @@ export default function App() {
             <div className="open-badge">{openCount} open position{openCount !== 1 ? 's' : ''}</div>
           )}
 
-          {/* Master Switch */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>AUTO</span>
-            <button
-              onClick={toggleMasterSwitch}
-              style={{
-                position: 'relative', width: 52, height: 28, borderRadius: 14,
-                border: 'none', background: masterSwitch ? '#16a34a' : '#374151',
-                cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0,
-              }}
-            >
-              <span style={{
-                position: 'absolute', top: 4,
-                left: masterSwitch ? 28 : 4,
-                width: 20, height: 20, borderRadius: '50%',
-                background: '#fff', transition: 'left 0.2s', display: 'block',
-              }} />
-            </button>
-            <span style={{ fontSize: 11, fontWeight: 700, color: masterSwitch ? '#4ade80' : '#6b7280', minWidth: 26 }}>
-              {masterSwitch ? 'ON' : 'OFF'}
-            </span>
-          </div>
         </div>
       </header>
 

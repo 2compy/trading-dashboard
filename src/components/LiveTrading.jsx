@@ -158,15 +158,18 @@ export default function LiveTrading() {
           onClick={() => enabledSymbols.forEach(f => enterTrade(f.symbol))}
           disabled={!masterSwitch || enabledSymbols.length === 0}
           style={{
-            width: '100%', padding: '10px 0', borderRadius: 8, border: 'none',
-            background: !masterSwitch || enabledSymbols.length === 0 ? '#1f2937' : '#2563eb',
+            width: '100%', padding: '16px 0', borderRadius: 12, border: 'none',
+            background: !masterSwitch || enabledSymbols.length === 0 ? '#1f2937' : '#dc2626',
             color: !masterSwitch || enabledSymbols.length === 0 ? '#4b5563' : '#fff',
-            fontWeight: 700, fontSize: 13, cursor: !masterSwitch || enabledSymbols.length === 0 ? 'not-allowed' : 'pointer',
+            fontWeight: 800, fontSize: 16, cursor: !masterSwitch || enabledSymbols.length === 0 ? 'not-allowed' : 'pointer',
+            letterSpacing: '0.5px', textTransform: 'uppercase',
+            boxShadow: masterSwitch && enabledSymbols.length > 0 ? '0 0 20px rgba(220, 38, 38, 0.4)' : 'none',
+            transition: 'all 0.2s',
           }}
         >
           {!masterSwitch ? 'Enable master switch to trade'
             : enabledSymbols.length === 0 ? 'No symbols selected'
-            : `Enter Trade — ${enabledSymbols.map(f => f.symbol).join(' · ')}`}
+            : 'Big Red Button'}
         </button>
       </div>
     </div>
