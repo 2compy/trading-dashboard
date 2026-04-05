@@ -3,6 +3,13 @@ import { useStore } from '../store'
 const UNIT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 const TRADE_LIMIT_OPTIONS = [1, 2, 3, 4, 5, '∞']
 
+// Approximate intraday margin per contract
+const MARGIN_PER_CONTRACT = {
+  'MES1!': 1500,
+  'MNQ1!': 1850,
+  'MGC1!': 1000,
+}
+
 export default function LiveTrading() {
   const {
     futures, livePrice, tradeSettings, updateTradeSetting,
@@ -14,6 +21,7 @@ export default function LiveTrading() {
   const enabledSymbols = futures.filter(f => symbolEnabled[f.symbol])
   const units = tradeSettings.liveUnits || 1
   const liveMaxPerSymbol = tradeSettings.liveMaxPerSymbol || {}
+  const costPerTrade = units * enabledSymbols.reduce((sum, f) => sum + (MARGIN_PER_CONTRACT[f.symbol] || 1000), 0)
 
   const getMaxForSymbol = (sym) => liveMaxPerSymbol[sym] || 3
 
@@ -52,24 +60,41 @@ export default function LiveTrading() {
 
       {/* Units per trade */}
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ fontWeight: 700, fontSize: 14 }}>Units per Trade</div>
-        <div style={{ fontSize: 11, color: '#6b7280' }}>How many contracts to buy per trade</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Units per Trade</div>
+          <div style={{ fontSize: 12, color: '#60a5fa', fontFamily: 'monospace' }}>
+            ${(units * (MARGIN_PER_CONTRACT['MES1!'] || 1000)).toLocaleString()} / trade (ES)
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: '#6b7280' }}>Each unit = 1 contract of margin</div>
         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-          {UNIT_OPTIONS.map(n => (
-            <button
-              key={n}
-              onClick={() => updateTradeSetting('liveUnits', n)}
-              style={{
-                width: 42, height: 38, borderRadius: 8, border: '1px solid',
-                borderColor: units === n ? '#7c3aed' : '#374151',
-                background: units === n ? '#4c1d95' : '#1f2937',
-                color: units === n ? '#c4b5fd' : '#6b7280',
-                fontWeight: 700, fontSize: 14, cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
-            >
-              {n}
-            </button>
+          {UNIT_OPTIONS.map(n => {
+            const cost = n * (MARGIN_PER_CONTRACT['MES1!'] || 1000)
+            return (
+              <button
+                key={n}
+                onClick={() => updateTradeSetting('liveUnits', n)}
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center',
+                  width: 52, padding: '6px 0', borderRadius: 8, border: '1px solid',
+                  borderColor: units === n ? '#7c3aed' : '#374151',
+                  background: units === n ? '#4c1d95' : '#1f2937',
+                  color: units === n ? '#c4b5fd' : '#6b7280',
+                  fontWeight: 700, cursor: 'pointer', transition: 'all 0.15s',
+                }}
+              >
+                <span style={{ fontSize: 14 }}>{n}</span>
+                <span style={{ fontSize: 8, opacity: 0.7 }}>${(cost / 1000).toFixed(1)}k</span>
+              </button>
+            )
+          })}
+        </div>
+        {/* Per-symbol margin breakdown */}
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 2 }}>
+          {futures.map(f => (
+            <div key={f.symbol} style={{ fontSize: 10, color: '#6b7280' }}>
+              {f.symbol}: <span style={{ color: '#93c5fd', fontFamily: 'monospace' }}>${((MARGIN_PER_CONTRACT[f.symbol] || 1000) * units).toLocaleString()}</span>
+            </div>
           ))}
         </div>
       </div>
@@ -84,6 +109,7 @@ export default function LiveTrading() {
             const price = livePrice[f.symbol]
             const symMax = getMaxForSymbol(f.symbol)
             const selectedMax = symMax === 'infinite' ? '∞' : symMax
+            const margin = MARGIN_PER_CONTRACT[f.symbol] || 1000
             return (
               <div key={f.symbol} style={{
                 padding: '10px 12px', borderRadius: 8,
@@ -93,7 +119,10 @@ export default function LiveTrading() {
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 13 }}>{f.symbol}</div>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>
+                      {f.symbol}
+                      <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 400, marginLeft: 6 }}>${margin.toLocaleString()}/contract</span>
+                    </div>
                     <div style={{ fontSize: 10, color: '#6b7280' }}>{f.name}</div>
                     <div style={{ fontFamily: 'monospace', color: '#60a5fa', fontSize: 12, marginTop: 1 }}>
                       ${price?.toFixed(2)}
