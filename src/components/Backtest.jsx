@@ -76,8 +76,9 @@ export default function Backtest({ onBack }) {
         </div>
 
         <div style={{ marginLeft: 'auto' }}>
-          <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>
-            Data: 5M (60d) · 1M (7d) · RR ≥ 2:1 · ICT Kill Zones
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 4, background: '#450a0a', color: '#f87171', letterSpacing: '0.5px' }}>SHORT</span>
+            <span style={{ fontSize: 11, color: '#6b7280' }}>5M (60d) · 1M (7d) · RR ≥ 2:1 · ICT Kill Zones</span>
           </div>
           <button
             onClick={runTest}
