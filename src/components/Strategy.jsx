@@ -67,9 +67,62 @@ const SHORT_STRATEGIES = {
 // ── LONG strategies per symbol (placeholder \u2014 to be filled in) ─────────────────
 
 const LONG_STRATEGIES = {
-  'MES1!': null,
-  'MNQ1!': null,
-  'MGC1!': null,
+  'MES1!': {
+    name: 'Prev Day Low Sweep + Power of 3 + OTE',
+    rules: [
+      'Kill Zones: London 3\u20135am ET, NY 8:30am\u201312pm ET, NY PM 1:30\u20133pm ET',
+      'Strategy A \u2014 Prev Day Low Sweep \u2192 MSS \u2192 FVG: Prev day low bearish sweep (wick below + close back above), then 5M bullish BOS. Entry on 1M FVG + IFVG retrace, or fallback to next 5M open after BOS.',
+      'Strategy B \u2014 Power of 3: Accumulation phase (range), manipulation (false break below range), distribution (bullish expansion). Entry after manipulation sweep confirms bullish.',
+      'Strategy C \u2014 OTE Long: After bullish BOS, wait for 62\u201379% Fibonacci retracement of the impulse leg. Entry at OTE zone with bullish reaction.',
+      'Also watches: Bullish order block in discount zone, Silver Bullet (10\u201311 AM ET).',
+    ],
+    risk: {
+      sl: 'Sweep wick extreme \u2212 2pt buffer (min 10pt, max 60pt)',
+      tp: 'Nearest swing high \u2265 SL \u00d7 3 distance (search window extends 30pt beyond)',
+      rr: '3:1',
+      units: '2 contracts',
+      cooldown: '10 min between trades, 20 min same-bias dedup',
+    },
+    signals: ['Sweep+BOS', 'Sweep+BOS+1mIFVG', 'PO3', 'OTE'],
+  },
+
+  'MNQ1!': {
+    name: 'Silver Bullet + Prev Day Low Sweep + Judas Swing',
+    rules: [
+      'Kill Zones: London 3\u20135am ET, NY 8:30am\u201312pm ET, NY PM 1:30\u20133pm ET',
+      'Strategy A \u2014 Silver Bullet: During 10:00\u201311:00 AM ET window, look for displacement into a bullish FVG on 5M. Entry on FVG midpoint retrace.',
+      'Strategy B \u2014 Prev Day Low Sweep \u2192 MSS \u2192 FVG: Prev day low bearish sweep (wick below + close back above), then 5M bullish BOS (market structure shift). Entry on 1M FVG retrace or 5M open after BOS.',
+      'Strategy C \u2014 Judas Swing: Fake move below session/prev day low in first 30min of NY session, then reversal with bullish displacement.',
+      'Also watches: Unicorn (OB+FVG overlap) and Breaker reclaim setups.',
+    ],
+    risk: {
+      sl: 'Fixed 35pt ($70 risk per contract)',
+      tp: 'Nearest swing high \u2265 SL \u00d7 3 distance',
+      rr: '3:1',
+      units: '2 contracts',
+      cooldown: '10 min between trades, 20 min same-bias dedup',
+    },
+    signals: ['SilverBullet', 'Sweep+BOS', 'Sweep+BOS+1mIFVG', 'JudasSwing'],
+  },
+
+  'MGC1!': {
+    name: 'HTF Bias + Session Low Sweep + OTE',
+    rules: [
+      'Kill Zones: Asia open 8pm\u2013midnight ET, NY open 8am\u2013noon ET',
+      'Strategy A \u2014 HTF Bias: 4H BOS sets bullish direction, 1H BOS must agree. No open FVG on 4H or 1H blocking path to TP. Enter on 5M FVG midpoint first touch only (skip if touched > 1 time). Longs \u2265 5pt FVG width.',
+      'Strategy B \u2014 Prev Session Low Sweep \u2192 MSS \u2192 FVG: Session low bearish sweep, then 5M bullish BOS. Entry on FVG midpoint retrace.',
+      'Strategy C \u2014 OTE Long: After bullish BOS, wait for 62\u201379% Fibonacci retracement. Entry at OTE zone.',
+      'Also watches: Breaker long, Inverse FVG reclaim, Bullish OB in discount.',
+    ],
+    risk: {
+      sl: 'Fixed 20pt ($200 risk per contract)',
+      tp: 'HTF: nearest 1H swing high beyond entry. IFVG: dynamic \u2265 SL \u00d7 3',
+      rr: '3:1',
+      units: '2 contracts',
+      cooldown: '10 min between trades, 20 min same-bias dedup',
+    },
+    signals: ['HTFBias+4h/1hClean+5mFVG+MidRetrace', 'Sweep+BOS', 'OTE'],
+  },
 }
 
 // ── Components ───────────────────────────────────────────────────────────────
