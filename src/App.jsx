@@ -49,13 +49,13 @@ export default function App() {
     return () => clearInterval(interval)
   }, [])
 
-  // Fetch MTF candles for strategy on load and every 5 min
+  // Fetch MTF candles for strategy on load and every 2 min
   useEffect(() => {
     if (!USE_LIVE) return
     FUTURES.forEach(f => fetchMTFCandles(f.symbol))
     const interval = setInterval(() => {
       FUTURES.forEach(f => fetchMTFCandles(f.symbol))
-    }, 5 * 60 * 1000)
+    }, 2 * 60 * 1000)
     return () => clearInterval(interval)
   }, [])
 
