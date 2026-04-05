@@ -267,13 +267,14 @@ const SL_BOUNDS = {
 }
 const DEFAULT_SL_BOUNDS = { min: 3, max: 60 }
 
-// ── LONG-specific overrides (longs need wider stops, lower RR) ──────────────
-const LONG_SYMBOL_RR = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
-const LONG_FIXED_SL  = { 'MES1!': null, 'MNQ1!': 45, 'MGC1!': 25 }
+// ── LONG-specific overrides ──────────────────────────────────────────────────
+// Much tighter TP (1.2:1 RR) so longs actually reach target
+const LONG_SYMBOL_RR = { 'MES1!': 1.2, 'MNQ1!': 1.2, 'MGC1!': 1.2 }
+const LONG_FIXED_SL  = { 'MES1!': null, 'MNQ1!': 40, 'MGC1!': 20 }
 const LONG_SL_BOUNDS = {
-  'MES1!': { min: 15, max: 80 },
-  'MNQ1!': { min: 20, max: 120 },
-  'MGC1!': { min: 5, max: 50 },
+  'MES1!': { min: 12, max: 50 },
+  'MNQ1!': { min: 15, max: 80 },
+  'MGC1!': { min: 5, max: 40 },
 }
 // Kill zone for longs: NY session only (8:30am–12pm ET) — highest probability for bullish reversals
 function isLongKillZone(ts) {
@@ -287,6 +288,49 @@ function isMGCLongKillZone(ts) {
          (mins >= 480 && mins < 720)   // NY:   8:00 AM – noon ET
 }
 
+// ── Smart long simulation with breakeven + TP-first + time exit ─────────────
+// 1. Check TP BEFORE SL on same candle (bullish bias)
+// 2. After price moves 50% toward TP, move SL to entry (breakeven)
+// 3. If neither hit after 120 candles (~2hrs on 1m, ~10hrs on 5m), exit at close
+function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 120) {
+  let currentSL = slPrice
+  const tpDist = tpPrice - entryPrice
+  const beThreshold = entryPrice + tpDist * 0.5  // move to BE after 50% of TP reached
+  let beMoved = false
+
+  for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
+    const fc = simCandles[k]
+
+    // Check TP first (bullish bias — if candle touches both, TP wins)
+    if (fc.high >= tpPrice) {
+      return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time }
+    }
+
+    // Breakeven logic: once price reached 50% of TP, move SL to entry
+    if (!beMoved && fc.high >= beThreshold) {
+      currentSL = entryPrice + 1  // 1pt above entry = small profit if stopped
+      beMoved = true
+    }
+
+    // Check SL (uses potentially moved-up breakeven stop)
+    if (fc.low <= currentSL) {
+      const exitPrice = currentSL
+      const outcome = exitPrice >= entryPrice ? 'win' : 'loss'
+      return { outcome, exitPrice, exitTime: fc.time }
+    }
+  }
+
+  // Time exit: close at last candle's close price
+  if (simCandles.length > 0) {
+    const lastIdx = Math.min(simCandles.length - 1, maxCandles - 1)
+    const lastCandle = simCandles[lastIdx]
+    const outcome = lastCandle.close >= entryPrice ? 'win' : 'loss'
+    return { outcome, exitPrice: lastCandle.close, exitTime: lastCandle.time }
+  }
+
+  return null
+}
+
 // ── SL/TP for LONG strategy (uses long-specific params) ──────────────────────
 function getTPSLLong(bias, entryPrice, sweepWickExtreme, recent5m, symbol) {
   let slPrice, slDist
@@ -294,30 +338,24 @@ function getTPSLLong(bias, entryPrice, sweepWickExtreme, recent5m, symbol) {
 
   if (fixedSL != null) {
     slDist = fixedSL
-    slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
+    slPrice = entryPrice - slDist
   } else {
-    // Sweep wick SL with wider buffer for longs (3pt instead of 2pt)
-    slPrice = bias === 'bullish' ? sweepWickExtreme - 3 : sweepWickExtreme + 3
+    // Sweep wick SL with buffer
+    slPrice = sweepWickExtreme - 3
     const slBounds = LONG_SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
-    if (bias === 'bullish' && entryPrice - slPrice < slBounds.min) slPrice = entryPrice - slBounds.min
-    if (bias === 'bearish' && slPrice - entryPrice < slBounds.min) slPrice = entryPrice + slBounds.min
+    if (entryPrice - slPrice < slBounds.min) slPrice = entryPrice - slBounds.min
     slDist = Math.abs(entryPrice - slPrice)
     if (slDist > slBounds.max) return null
   }
 
-  const rr = LONG_SYMBOL_RR[symbol] || 2
+  const rr = LONG_SYMBOL_RR[symbol] || 1.2
   const minTPDist = slDist * rr
-  const maxTPDist = minTPDist + 40  // wider search window for longs
+  const maxTPDist = minTPDist + 30
 
-  const { highs, lows } = detectSwings(recent5m, 3)
-  let tpPrice
-  if (bias === 'bullish') {
-    const c = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
-    tpPrice = c[0]?.price ?? entryPrice + minTPDist
-  } else {
-    const c = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
-    tpPrice = c[0]?.price ?? entryPrice - minTPDist
-  }
+  const { highs } = detectSwings(recent5m, 3)
+  const c = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+  const tpPrice = c[0]?.price ?? entryPrice + minTPDist
+
   return { slPrice, tpPrice }
 }
 
@@ -579,23 +617,18 @@ function runBacktestMGCLong(candles5m) {
     if (tpPrice <= entryPrice) continue
 
     const tpDist = Math.abs(tpPrice - entryPrice)
-    if (tpDist / slDist < (LONG_SYMBOL_RR['MGC1!'] || 2)) continue
+    if (tpDist / slDist < (LONG_SYMBOL_RR['MGC1!'] || 1.2)) continue
 
-    // ── Simulate on 5m ───────────────────────────────────────────────────────
+    // ── Smart long simulation (TP-first, breakeven, time exit) ──────────────
     const entryIdx = candles5m.indexOf(entryCandle)
     const future5m = candles5m.slice(entryIdx + 1, entryIdx + 300)
-    let outcome = null, exitPrice = null, exitTime = null
 
-    for (const fc of future5m) {
-      if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
-      if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
-    }
+    const simResult = simulateLongTrade(future5m, entryPrice, slPrice, tpPrice, 60)
+    if (!simResult) continue
 
-    if (!outcome) continue
-
-    const pnlPoints  = outcome === 'win' ? tpDist : -slDist
+    const { outcome, exitPrice, exitTime } = simResult
     const units      = UNITS['MGC1!'] || 1
-    const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
+    const actualPnl  = (exitPrice - entryPrice) * multiplier * units
     const rr         = parseFloat((tpDist / slDist).toFixed(2))
 
     trades.push({
@@ -604,7 +637,7 @@ function runBacktestMGCLong(candles5m) {
       stopPrice:   parseFloat(slPrice.toFixed(4)),
       targetPrice: parseFloat(tpPrice.toFixed(4)),
       exitPrice:   parseFloat(exitPrice.toFixed(4)),
-      outcome, pnlDollars, rr, contracts: units,
+      outcome, pnlDollars: parseFloat(actualPnl.toFixed(2)), rr, contracts: units,
       signal: 'HTFBias+4h/1hClean+5mFVG+MidRetrace',
     })
 
@@ -904,29 +937,19 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
     const slDist = Math.abs(entryPrice - slPrice)
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (slDist === 0 || tpDist <= 0) continue
-    if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 2)) continue
+    if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 1.2)) continue
 
     const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
     const future1m   = candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
     const entryIdx5m = candles5m.findIndex(c => c.time >= entryCandle.time)
     const simCandles = future1m.length > 0 ? future1m : candles5m.slice(entryIdx5m + 1, entryIdx5m + 200)
-    let outcome = null, exitPrice = null, exitTime = null
 
-    for (const fc of simCandles) {
-      if (bias === 'bullish') {
-        if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
-        if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
-      } else {
-        if (fc.high >= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
-        if (fc.low  <= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
-      }
-    }
+    // Use smart long simulation (TP-first, breakeven, time exit)
+    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+    if (!simResult) continue
 
-    if (!outcome) continue
-
-    const pnlPoints  = outcome === 'win' ? tpDist : -slDist
-    const units      = UNITS[symbol] || 1
-    const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
+    const { outcome, exitPrice, exitTime } = simResult
+    const actualPnl = (exitPrice - entryPrice) * multiplier * (UNITS[symbol] || 1)
 
     trades.push({
       time:        entryCandle.time,
@@ -936,7 +959,9 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       stopPrice:   parseFloat(slPrice.toFixed(4)),
       targetPrice: parseFloat(tpPrice.toFixed(4)),
       exitPrice:   parseFloat(exitPrice.toFixed(4)),
-      outcome, pnlDollars, contracts: units,
+      outcome,
+      pnlDollars:  parseFloat(actualPnl.toFixed(2)),
+      contracts:   UNITS[symbol] || 1,
       rr:          parseFloat((tpDist / slDist).toFixed(2)),
       signal:      entrySignal,
     })
@@ -1113,10 +1138,10 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
     }
     slPrice = entryPrice - slDist
 
-    // TP: dynamic, long-specific 2:1 R:R
-    const minRR_sym = LONG_SYMBOL_RR[symbol] || 2
+    // TP: dynamic, long-specific 1.2:1 R:R
+    const minRR_sym = LONG_SYMBOL_RR[symbol] || 1.2
     const minTPDist = slDist * minRR_sym
-    const maxTPDist = minTPDist + 40
+    const maxTPDist = minTPDist + 30
 
     const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
     const recent5m = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
@@ -1131,23 +1156,18 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (tpDist / slDist < minRR_sym) continue
 
-    // Simulate: use 1m candles if available, else 5m
+    // Smart long simulation (TP-first, breakeven, time exit)
     const entryIdx1m = candles1m?.length ? candles1m.findIndex(c => c.time >= entryCandle.time) : -1
     const simCandles = entryIdx1m >= 0 && entryIdx1m < candles1m.length - 1
       ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
       : candles5m.slice(entryIdx + 1, entryIdx + 200)
-    let outcome = null, exitPrice = null, exitTime = null
 
-    for (const fc of simCandles) {
-      if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
-      if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
-    }
+    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+    if (!simResult) continue
 
-    if (!outcome) continue
-
-    const pnlPoints  = outcome === 'win' ? tpDist : -slDist
+    const { outcome, exitPrice, exitTime } = simResult
     const units      = UNITS[symbol] || 1
-    const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
+    const actualPnl  = (exitPrice - entryPrice) * multiplier * units
     const rrActual   = parseFloat((tpDist / slDist).toFixed(2))
 
     trades.push({
@@ -1156,7 +1176,7 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
       stopPrice:   parseFloat(slPrice.toFixed(4)),
       targetPrice: parseFloat(tpPrice.toFixed(4)),
       exitPrice:   parseFloat(exitPrice.toFixed(4)),
-      outcome, pnlDollars, rr: rrActual, contracts: units,
+      outcome, pnlDollars: parseFloat(actualPnl.toFixed(2)), rr: rrActual, contracts: units,
       signal: 'IFVG-Mid-Retrace',
     })
 
