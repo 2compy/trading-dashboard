@@ -1,39 +1,14 @@
-import { useEffect, useRef, useState, useMemo } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createChart, CrosshairMode, CandlestickSeries } from 'lightweight-charts'
 import { useStore, TIMEFRAMES } from '../store'
-import { detectFVGs, isKillZone, getSignalDebugInfo } from '../utils/strategy'
+import { isKillZone } from '../utils/strategy'
 
-const USE_LIVE = !!import.meta.env.VITE_USE_LIVE_API
-
-// Step → color mapping for the debug panel
-const STEP_COLOR = {
-  no_data:   '#6b7280',
-  no_ts:     '#6b7280',
-  kill_zone: '#f59e0b',
-  prev_day:  '#f59e0b',
-  sweep:     '#fb923c',
-  bos_data:  '#fb923c',
-  bos:       '#fb923c',
-  fvg_data:  '#a78bfa',
-  fvg:       '#a78bfa',
-  fvg_width: '#a78bfa',
-  ifvg:      '#60a5fa',
-  signal:    '#4ade80',
-}
-
-const STEP_DOT = {
-  no_data: '#374151', no_ts: '#374151', kill_zone: '#f59e0b', prev_day: '#f59e0b',
-  sweep: '#fb923c', bos_data: '#fb923c', bos: '#fb923c',
-  fvg_data: '#a78bfa', fvg: '#a78bfa', fvg_width: '#a78bfa',
-  ifvg: '#60a5fa', signal: '#22c55e',
-}
 
 export default function LiveChart() {
   const {
     futures, selectedSymbol, setSelectedSymbol,
     candleData, livePrice, priceChange,
     timeframe, setTimeframe, fetchCandles,
-    trades, mtfCandles,
   } = useStore()
 
   const chartContainerRef = useRef(null)
@@ -48,13 +23,6 @@ export default function LiveChart() {
     const interval = setInterval(check, 30000)
     return () => clearInterval(interval)
   }, [])
-
-  // Signal debug — computed from mtfCandles (live mode only)
-  const signalDebug = useMemo(() => {
-    const c5m = mtfCandles[selectedSymbol]?.['5m'] || []
-    const c1m = mtfCandles[selectedSymbol]?.['1m'] || []
-    return getSignalDebugInfo(c5m, c1m, selectedSymbol)
-  }, [mtfCandles, selectedSymbol])
 
   // ── Create chart once on mount ────────────────────────────────────────────
   useEffect(() => {
@@ -124,7 +92,7 @@ export default function LiveChart() {
     fetchCandles(selectedSymbol, timeframe)
   }, [selectedSymbol, timeframe])
 
-  // ── FVG overlays + trade markers ─────────────────────────────────────────
+  // ── Clean chart — no overlays ─────────────────────────────────────────
   useEffect(() => {
     if (!seriesRef.current) return
 
@@ -134,65 +102,10 @@ export default function LiveChart() {
     })
     priceLinesRef.current = []
 
-    // FVG overlays: show the 6 most recent FVGs on the current chart data
-    const candles = candleData[selectedSymbol] || []
-    if (candles.length >= 3) {
-      const fvgs = detectFVGs(candles).slice(-6)
-      fvgs.forEach(fvg => {
-        const color = fvg.type === 'bullish' ? '#22c55e' : '#ef4444'
-        const label = fvg.type === 'bullish' ? 'BFVG' : 'BFVG'
-        try {
-          const top = seriesRef.current.createPriceLine({
-            price: fvg.top, color, lineWidth: 1, lineStyle: 2,
-            axisLabelVisible: true,
-            title: fvg.type === 'bullish' ? '▲FVG' : '▼FVG',
-          })
-          const bot = seriesRef.current.createPriceLine({
-            price: fvg.bottom, color, lineWidth: 1, lineStyle: 2,
-            axisLabelVisible: false, title: '',
-          })
-          priceLinesRef.current.push(top, bot)
-        } catch (_) {}
-      })
-    }
+    // Clear markers
+    try { seriesRef.current.setMarkers([]) } catch (_) {}
 
-    // Trade markers: entry arrows + exit circles for the selected symbol
-    const markers = []
-    trades.forEach(t => {
-      if (t.symbol !== selectedSymbol) return
-      const entryTs = Math.floor(new Date(t.entryTime).getTime() / 1000)
-      markers.push({
-        time: entryTs,
-        position: t.side === 'LONG' ? 'belowBar' : 'aboveBar',
-        color: '#3b82f6',
-        shape: t.side === 'LONG' ? 'arrowUp' : 'arrowDown',
-        text: `#${t.id}${t.auto ? ' ⚡' : ''}`,
-      })
-      if (t.status === 'CLOSED' && t.exitTime) {
-        const exitTs = Math.floor(new Date(t.exitTime).getTime() / 1000)
-        const isWin = (t.pnl || 0) >= 0
-        markers.push({
-          time: exitTs + 1,   // +1s to avoid collision with an entry at the same bar
-          position: isWin ? 'aboveBar' : 'belowBar',
-          color: isWin ? '#22c55e' : '#ef4444',
-          shape: 'circle',
-          text: `${isWin ? '✓' : '✗'} $${Math.abs(t.pnl || 0).toFixed(0)}`,
-        })
-      }
-    })
-
-    // Sort and dedup by time (lightweight-charts requires ascending order)
-    markers.sort((a, b) => a.time - b.time)
-    const seen = new Set()
-    const unique = markers.filter(m => {
-      if (seen.has(m.time)) { m.time += 1; }  // shift by 1s if collision
-      seen.add(m.time)
-      return true
-    })
-
-    try { seriesRef.current.setMarkers(unique) } catch (_) {}
-
-  }, [selectedSymbol, candleData, trades])
+  }, [selectedSymbol, candleData])
 
   // FIX: handleTimeframe only updates state — the useEffect above handles the fetch
   const handleTimeframe = (tf) => {
