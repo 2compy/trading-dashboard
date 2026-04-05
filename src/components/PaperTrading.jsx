@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useStore } from '../store'
 
 const UNIT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-const TRADE_LIMIT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+const TRADE_LIMIT_OPTIONS = [1, 2, 3, 4, 5, '∞']
 
 export default function PaperTrading() {
   const {
@@ -14,8 +14,10 @@ export default function PaperTrading() {
   const [paperOn, setPaperOn] = useState(false)
   const [paperTrades, setPaperTrades] = useState([])
   const units = tradeSettings.paperUnits || 1
-  const maxTrades = tradeSettings.paperMaxTrades || 3
+  const paperMaxPerSymbol = tradeSettings.paperMaxPerSymbol || {}
   const enabledSymbols = futures.filter(f => symbolEnabled[f.symbol])
+
+  const getMaxForSymbol = (sym) => paperMaxPerSymbol[sym] || 3
 
   const enterPaperTrade = () => {
     enabledSymbols.forEach(f => {
@@ -99,31 +101,7 @@ export default function PaperTrading() {
         </div>
       </div>
 
-      {/* Max trades per day */}
-      <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ fontWeight: 700, fontSize: 14 }}>Max Trades per Day</div>
-        <div style={{ fontSize: 11, color: '#6b7280' }}>Limit how many paper trades can be taken</div>
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-          {TRADE_LIMIT_OPTIONS.map(n => (
-            <button
-              key={n}
-              onClick={() => updateTradeSetting('paperMaxTrades', n)}
-              style={{
-                width: 42, height: 38, borderRadius: 8, border: '1px solid',
-                borderColor: maxTrades === n ? '#a16207' : '#374151',
-                background: maxTrades === n ? '#451a03' : '#1f2937',
-                color: maxTrades === n ? '#fbbf24' : '#6b7280',
-                fontWeight: 700, fontSize: 14, cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
-            >
-              {n}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Active Symbols */}
+      {/* Active Symbols with per-symbol max trades */}
       <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ fontWeight: 700, fontSize: 14 }}>Active Symbols</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -131,38 +109,66 @@ export default function PaperTrading() {
             const enabled = symbolEnabled[f.symbol]
             const open = openPaper.filter(t => t.symbol === f.symbol).length
             const price = livePrice[f.symbol]
+            const symMax = getMaxForSymbol(f.symbol)
+            const selectedMax = symMax === 'infinite' ? '∞' : symMax
             return (
               <div key={f.symbol} style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 padding: '10px 12px', borderRadius: 8,
                 border: `1px solid ${enabled ? '#a16207' : '#1f2937'}`,
                 background: enabled ? '#0f172a' : '#111827',
-                transition: 'all 0.15s', gap: 10,
+                transition: 'all 0.15s',
               }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13 }}>{f.symbol}</div>
-                  <div style={{ fontSize: 10, color: '#6b7280' }}>{f.name}</div>
-                  <div style={{ fontFamily: 'monospace', color: '#fbbf24', fontSize: 12, marginTop: 1 }}>
-                    ${price?.toFixed(2)}
-                    {open > 0 && <span style={{ color: '#fbbf24', background: '#451a03', padding: '1px 5px', borderRadius: 999, marginLeft: 4, fontSize: 10 }}>{open} paper</span>}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>{f.symbol}</div>
+                    <div style={{ fontSize: 10, color: '#6b7280' }}>{f.name}</div>
+                    <div style={{ fontFamily: 'monospace', color: '#fbbf24', fontSize: 12, marginTop: 1 }}>
+                      ${price?.toFixed(2)}
+                      {open > 0 && <span style={{ color: '#fbbf24', background: '#451a03', padding: '1px 5px', borderRadius: 999, marginLeft: 4, fontSize: 10 }}>{open} paper</span>}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                    <button
+                      onClick={() => toggleSymbol(f.symbol)}
+                      style={{
+                        position: 'relative', width: 44, height: 24, borderRadius: 12,
+                        border: 'none', background: enabled ? '#a16207' : '#374151',
+                        cursor: 'pointer', transition: 'background 0.2s',
+                      }}
+                    >
+                      <span style={{
+                        position: 'absolute', top: 3,
+                        left: enabled ? 23 : 3,
+                        width: 18, height: 18, borderRadius: '50%',
+                        background: '#fff', transition: 'left 0.2s', display: 'block',
+                      }} />
+                    </button>
                   </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                  <button
-                    onClick={() => toggleSymbol(f.symbol)}
-                    style={{
-                      position: 'relative', width: 44, height: 24, borderRadius: 12,
-                      border: 'none', background: enabled ? '#a16207' : '#374151',
-                      cursor: 'pointer', transition: 'background 0.2s',
-                    }}
-                  >
-                    <span style={{
-                      position: 'absolute', top: 3,
-                      left: enabled ? 23 : 3,
-                      width: 18, height: 18, borderRadius: '50%',
-                      background: '#fff', transition: 'left 0.2s', display: 'block',
-                    }} />
-                  </button>
+                {/* Per-symbol trades per day */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, minWidth: 70 }}>Trades/day</span>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {TRADE_LIMIT_OPTIONS.map(c => {
+                      const val = c === '∞' ? 'infinite' : c
+                      return (
+                        <button
+                          key={c}
+                          onClick={() => updateTradeSetting('paperMaxPerSymbol', { ...paperMaxPerSymbol, [f.symbol]: val })}
+                          style={{
+                            width: 34, height: 28, borderRadius: 6, border: '1px solid',
+                            borderColor: selectedMax === c ? '#a16207' : '#374151',
+                            background: selectedMax === c ? '#451a03' : '#1f2937',
+                            color: selectedMax === c ? '#fbbf24' : '#6b7280',
+                            fontWeight: 700, fontSize: 12, cursor: 'pointer',
+                            transition: 'all 0.15s',
+                          }}
+                        >
+                          {c}
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
               </div>
             )
@@ -171,7 +177,7 @@ export default function PaperTrading() {
 
         {paperOn && (
           <div style={{ fontSize: 11, color: '#fbbf24', background: '#451a03', borderRadius: 6, padding: '6px 10px', textAlign: 'center' }}>
-            Paper mode — {units} unit{units !== 1 ? 's' : ''} per trade, max {maxTrades}/day on {enabledSymbols.length} symbol{enabledSymbols.length !== 1 ? 's' : ''}
+            Paper mode — {units} unit{units !== 1 ? 's' : ''} per trade on {enabledSymbols.length} symbol{enabledSymbols.length !== 1 ? 's' : ''}
           </div>
         )}
 
