@@ -92,6 +92,22 @@ export default function LiveChart() {
     fetchCandles(selectedSymbol, timeframe)
   }, [selectedSymbol, timeframe])
 
+  // ── Update last candle close to match live price ──────────────────────
+  useEffect(() => {
+    if (!seriesRef.current) return
+    const price = livePrice[selectedSymbol]
+    const candles = candleData[selectedSymbol]
+    if (!price || !candles || candles.length === 0) return
+    const last = candles[candles.length - 1]
+    seriesRef.current.update({
+      time: last.time,
+      open: last.open,
+      high: Math.max(last.high, price),
+      low: Math.min(last.low, price),
+      close: price,
+    })
+  }, [livePrice, selectedSymbol, candleData])
+
   // ── Clean chart — no overlays ─────────────────────────────────────────
   useEffect(() => {
     if (!seriesRef.current) return
