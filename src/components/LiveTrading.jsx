@@ -25,6 +25,7 @@ export default function LiveTrading() {
   } = useStore()
 
   const openTrades = trades.filter(t => t.status === 'OPEN')
+  const closedTrades = trades.filter(t => t.status === 'CLOSED')
   const enabledSymbols = futures.filter(f => symbolEnabled[f.symbol])
   const units = tradeSettings.liveUnits || 1
   const liveMaxPerSymbol = tradeSettings.liveMaxPerSymbol || {}
@@ -136,7 +137,29 @@ export default function LiveTrading() {
                       {open > 0 && <span style={{ color: '#60a5fa', background: '#1e3a5f', padding: '1px 5px', borderRadius: 999, marginLeft: 4, fontSize: 10 }}>{open} open</span>}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+                    {/* Per-symbol stats */}
+                    {(() => {
+                      const symClosed = closedTrades.filter(t => t.symbol === f.symbol)
+                      const symWins = symClosed.filter(t => (t.pnl || 0) > 0).length
+                      const symLosses = symClosed.length - symWins
+                      const symWR = symClosed.length > 0 ? ((symWins / symClosed.length) * 100).toFixed(0) : null
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 10, color: '#4ade80', fontWeight: 700 }}>{symWins}W</span>
+                            <span style={{ fontSize: 10, color: '#f87171', fontWeight: 700 }}>{symLosses}L</span>
+                            <span style={{ fontSize: 10, color: '#6b7280' }}>{symClosed.length} trades</span>
+                          </div>
+                          <div style={{
+                            fontSize: 11, fontWeight: 800,
+                            color: symWR && parseInt(symWR) >= 50 ? '#4ade80' : symWR ? '#f87171' : '#4b5563',
+                          }}>
+                            {symWR ? `${symWR}% WR` : 'No trades'}
+                          </div>
+                        </div>
+                      )
+                    })()}
                     <button
                       onClick={() => toggleSymbol(f.symbol)}
                       style={{
