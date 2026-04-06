@@ -1,7 +1,7 @@
 import { FUTURES } from '../store'
 import { CONTRACT_MULTIPLIER } from '../utils/strategy'
 
-const SYMBOL_RR = { 'MES1!': 3, 'MNQ1!': 3, 'MGC1!': 3 }
+const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 const UNITS     = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
 const FIXED_SL  = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20 }
 const FVG_WIDTH = { 'MES1!': 7, 'MNQ1!': 20, 'MGC1!': 3 }
@@ -19,8 +19,8 @@ const SHORT_STRATEGIES = {
     ],
     risk: {
       sl: 'Sweep wick extreme + 2pt buffer (min 10pt, max 60pt)',
-      tp: 'Nearest swing low \u2265 SL \u00d7 3 distance (search window extends 30pt beyond)',
-      rr: '3:1',
+      tp: 'Nearest swing low \u2265 SL \u00d7 4 distance (search window extends 30pt beyond)',
+      rr: '4:1',
       units: '2 contracts',
       cooldown: '10 min between trades, 20 min same-bias dedup',
     },
@@ -37,8 +37,8 @@ const SHORT_STRATEGIES = {
     ],
     risk: {
       sl: 'Fixed 35pt ($70 risk per contract)',
-      tp: 'Nearest swing low \u2265 SL \u00d7 3 distance',
-      rr: '3:1',
+      tp: 'Nearest swing low \u2265 SL \u00d7 4 distance',
+      rr: '4:1',
       units: '2 contracts',
       cooldown: '10 min between trades, 20 min same-bias dedup',
     },
@@ -55,8 +55,8 @@ const SHORT_STRATEGIES = {
     ],
     risk: {
       sl: 'Fixed 20pt ($200 risk per contract)',
-      tp: 'HTF: nearest 1H swing low beyond entry. IFVG: dynamic \u2265 SL \u00d7 3',
-      rr: '3:1',
+      tp: 'HTF: nearest 1H swing low beyond entry. IFVG: dynamic \u2265 SL \u00d7 4',
+      rr: '4:1',
       units: '2 contracts',
       cooldown: '10 min between trades, 20 min same-bias dedup',
     },

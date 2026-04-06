@@ -13,7 +13,7 @@ const SYMBOL_MAP = {
 const CONTRACT_MULTIPLIER = { 'MES1!': 5, 'MNQ1!': 2, 'MGC1!': 10 }
 // Units (contracts) per trade per symbol
 const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
-const MIN_RR = 2
+const MIN_RR = 4
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
 async function fetch5mChunked(ticker) {
@@ -250,7 +250,7 @@ function findIFVGEntry(candles, fvg, bias) {
 // ── Fixed SL per symbol (null = use sweep wick) ─────────────────────────────
 const FIXED_SL = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20 }
 // ── Min R:R per symbol ──────────────────────────────────────────────────────
-const SYMBOL_RR = { 'MES1!': 3, 'MNQ1!': 3, 'MGC1!': 3 }
+const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 // ── Min FVG width for IFVG detection, per symbol ────────────────────────────
 // MGC ~3100 → 3pt, MES ~5500 → 7pt, MNQ ~19000 → 20pt, Silver ~32 → 0.10
 const MIN_FVG_WIDTH = {

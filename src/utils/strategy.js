@@ -195,9 +195,9 @@ export function calcFuturesPnl(entryPrice, exitPrice, symbol, side) {
   return parseFloat(((exitPrice - entryPrice) * mult * dir).toFixed(2))
 }
 
-const MIN_RR = 2
+const MIN_RR = 4
 const FIXED_SL = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20 }
-const SYMBOL_RR = { 'MES1!': 3, 'MNQ1!': 3, 'MGC1!': 3 }
+const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 // Units (contracts) per trade per symbol
 const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
 // Per-symbol min FVG width for IFVG detection
