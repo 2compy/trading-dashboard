@@ -303,20 +303,20 @@ function isMGCLongKillZone(ts) {
          (mins >= 420 && mins < 780)   // NY:   7:00 AM – 1:00 PM ET
 }
 
-// ── Smart long simulation — optimized for high win rate ──────────────────────
-// Key principles:
-//   - Check TP before SL on each candle (if both hit, TP wins)
-//   - Aggressive breakeven: move SL to entry+1 after just 25% toward TP
-//   - Trailing stop: after 50% toward TP, trail SL keeping 35% of TP dist below high
-//   - Time exit after 200 candles — exit at close
-function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 200) {
+// ── Smart long simulation — $300 max loss, let winners run to $2000+ ─────────
+// Phases:
+//   Phase 1 (0-25% of TP): raw SL, if hit = loss ($300 max)
+//   Phase 2 (25-100% of TP): SL moved to entry+1 (breakeven)
+//   Phase 3 (TP hit): DON'T exit — switch to trailing mode to ride the move
+//   Trailing: SL trails at 30% of total profit below the high watermark
+//   Time exit after 300 candles at current price
+function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300) {
   let currentSL = slPrice
   const tpDist = tpPrice - entryPrice
   if (tpDist <= 0) return null
-  const beThreshold    = entryPrice + tpDist * 0.25  // BE after 25% of TP
-  const trailThreshold = entryPrice + tpDist * 0.50  // trail after 50% of TP
+  const beThreshold = entryPrice + tpDist * 0.25
   let beMoved = false
-  let trailing = false
+  let tpReached = false
   let highestHigh = entryPrice
 
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
@@ -325,23 +325,30 @@ function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles 
     // Track highest high
     if (fc.high > highestHigh) highestHigh = fc.high
 
-    // TP hit — always check first
-    if (fc.high >= tpPrice) {
-      return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time }
-    }
-
-    // Breakeven: after 25% of move, lock in entry + 1pt
+    // Breakeven: after 25% toward TP, lock in entry + 1pt
     if (!beMoved && fc.high >= beThreshold) {
       currentSL = entryPrice + 1
       beMoved = true
     }
 
-    // Trailing: after 50% of move, trail SL to lock in profits
-    if (!trailing && fc.high >= trailThreshold) {
-      trailing = true
+    // TP reached: don't exit, switch to trailing to let winners run
+    if (!tpReached && fc.high >= tpPrice) {
+      tpReached = true
+      // Lock in at least 60% of the TP move
+      const lockSL = entryPrice + tpDist * 0.6
+      if (lockSL > currentSL) currentSL = lockSL
     }
-    if (trailing) {
-      const trailSL = highestHigh - tpDist * 0.35
+
+    // Trailing stop: once TP is reached, trail aggressively to capture big moves
+    if (tpReached) {
+      const profit = highestHigh - entryPrice
+      // Trail SL at 30% below the high watermark profit
+      const trailSL = entryPrice + profit * 0.7
+      if (trailSL > currentSL) currentSL = trailSL
+    } else if (beMoved) {
+      // Before TP: gentle trail after breakeven
+      const profit = highestHigh - entryPrice
+      const trailSL = entryPrice + profit * 0.4
       if (trailSL > currentSL) currentSL = trailSL
     }
 
