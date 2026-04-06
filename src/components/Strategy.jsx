@@ -68,57 +68,60 @@ const SHORT_STRATEGIES = {
 
 const LONG_STRATEGIES = {
   'MES1!': {
-    name: 'Sweep + BOS + IFVG Mid Retrace (Bullish Mirror)',
+    name: 'Sweep + BOS + IFVG Mid + Uptrend FVG Tap-Back',
     rules: [
       'Kill Zones: London 3\u20135am ET, NY 8:30am\u201312pm ET, NY PM 1:30\u20133pm ET',
       'Strategy A \u2014 Sweep + BOS: Prev day H/L or session H/L bullish sweep (wick below + close back above), then 5M BOS bullish confirmation (min 3 candles post-sweep). Entry on 1M FVG + IFVG retrace, or fallback to next 5M open after BOS.',
       'Strategy B \u2014 IFVG Mid Retrace: Find 5M FVGs \u2265 7pt wide that get inversed (price closes through entire FVG). After inversion, wait for price to retrace back down to the IFVG midpoint \u2192 LONG entry.',
-      'Either strategy can trigger a trade \u2014 first signal wins.',
+      'Strategy C \u2014 Uptrend FVG Tap-Back: Bullish FVG forms in an uptrend (\u22652 higher highs + higher lows), FVG must be \u2265 4pt wide. Wait for price to tap back into the FVG zone \u2192 LONG entry at FVG midpoint. SL/TP are fixed at entry and never move.',
+      'Any strategy can trigger a trade \u2014 first signal wins.',
     ],
     risk: {
-      sl: 'Sweep wick extreme + 2pt buffer (min 10pt, max 60pt)',
-      tp: 'Nearest swing high \u2265 SL \u00d7 4 distance (search window extends 30pt beyond)',
+      sl: 'Sweep wick extreme + 2pt buffer (min 10pt, max 60pt). Strategy C: below FVG bottom + 2pt buffer. SL is fixed at entry \u2014 never moves.',
+      tp: 'Nearest swing high \u2265 SL \u00d7 4 distance (search window extends 30pt beyond). TP is fixed at entry \u2014 never moves.',
       rr: '4:1',
       units: '2 contracts',
       cooldown: '10 min between trades, 20 min same-bias dedup',
     },
-    signals: ['Sweep+BOS', 'Sweep+BOS+1mIFVG', 'IFVG-Mid-Retrace'],
+    signals: ['Sweep+BOS', 'Sweep+BOS+1mIFVG', 'IFVG-Mid-Retrace', 'Uptrend-FVG-TapBack'],
   },
 
   'MNQ1!': {
-    name: 'Sweep + BOS + IFVG Mid Retrace (Bullish Mirror)',
+    name: 'Sweep + BOS + IFVG Mid + Uptrend FVG Tap-Back',
     rules: [
       'Kill Zones: London 3\u20135am ET, NY 8:30am\u201312pm ET, NY PM 1:30\u20133pm ET',
       'Strategy A \u2014 Sweep + BOS: Prev day H/L or session H/L bullish sweep, then 5M BOS bullish confirmation. Entry on 1M FVG + IFVG retrace, or fallback to next 5M open after BOS.',
       'Strategy B \u2014 IFVG Mid Retrace: Find 5M FVGs \u2265 20pt wide that get inversed. After inversion, wait for midpoint retrace \u2192 LONG entry.',
-      'Fixed SL of 35pt. Either strategy can trigger.',
+      'Strategy C \u2014 Uptrend FVG Tap-Back: Bullish FVG forms in an uptrend (\u22652 higher highs + higher lows), FVG must be \u2265 4pt wide. Wait for price to tap back into the FVG zone \u2192 LONG entry at FVG midpoint. SL/TP are fixed at entry and never move.',
+      'Fixed SL of 35pt. Any strategy can trigger.',
     ],
     risk: {
-      sl: 'Fixed 35pt ($70 risk per contract)',
-      tp: 'Nearest swing high \u2265 SL \u00d7 4 distance',
+      sl: 'Fixed 35pt ($70 risk per contract). SL is fixed at entry \u2014 never moves.',
+      tp: 'Nearest swing high \u2265 SL \u00d7 4 distance. TP is fixed at entry \u2014 never moves.',
       rr: '4:1',
       units: '2 contracts',
       cooldown: '10 min between trades, 20 min same-bias dedup',
     },
-    signals: ['Sweep+BOS', 'Sweep+BOS+1mIFVG', 'IFVG-Mid-Retrace'],
+    signals: ['Sweep+BOS', 'Sweep+BOS+1mIFVG', 'IFVG-Mid-Retrace', 'Uptrend-FVG-TapBack'],
   },
 
   'MGC1!': {
-    name: 'HTF Bias + IFVG Mid Retrace (Bullish Mirror)',
+    name: 'HTF Bias + IFVG Mid + Uptrend FVG Tap-Back',
     rules: [
       'Kill Zones: Asia open 8pm\u2013midnight ET, NY open 8am\u2013noon ET',
       'Strategy A \u2014 HTF Bias: 4H BOS sets bullish direction, 1H BOS must agree. No open FVG on 4H or 1H blocking path to TP. Enter on 5M FVG midpoint first touch only (skip if touched > 1 time). Longs \u2265 5pt, Shorts \u2265 7pt FVG width.',
       'Strategy B \u2014 IFVG Mid Retrace: Find 5M FVGs \u2265 3pt wide that get inversed. After inversion, wait for midpoint retrace \u2192 LONG entry.',
-      'Both strategies active \u2014 merged with aggressive dedup.',
+      'Strategy C \u2014 Uptrend FVG Tap-Back: Bullish FVG forms in an uptrend (\u22652 higher highs + higher lows), FVG must be \u2265 4pt wide. Wait for price to tap back into the FVG zone \u2192 LONG entry at FVG midpoint. SL/TP are fixed at entry and never move.',
+      'All strategies active \u2014 merged with aggressive dedup.',
     ],
     risk: {
-      sl: 'Fixed 20pt ($200 risk per contract)',
-      tp: 'HTF: nearest 1H swing high beyond entry. IFVG: dynamic \u2265 SL \u00d7 4',
+      sl: 'Fixed 20pt ($200 risk per contract). SL is fixed at entry \u2014 never moves.',
+      tp: 'HTF: nearest 1H swing high beyond entry. IFVG/FVG Tap-Back: dynamic \u2265 SL \u00d7 4. TP is fixed at entry \u2014 never moves.',
       rr: '4:1',
       units: '2 contracts',
       cooldown: '10 min between trades, 20 min same-bias dedup',
     },
-    signals: ['HTFBias+4h/1hClean+5mFVG+MidRetrace', 'IFVG-Mid-Retrace'],
+    signals: ['HTFBias+4h/1hClean+5mFVG+MidRetrace', 'IFVG-Mid-Retrace', 'Uptrend-FVG-TapBack'],
   },
 }
 

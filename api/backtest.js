@@ -1500,8 +1500,8 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
   let lastTradeTime = 0
   const usedFVGs = new Set()
 
-  // Pre-detect ALL bullish FVGs ≥ 3pt
-  const allFVGs = detectFVGs(candles5m).filter(f => f.type === 'bullish' && (f.top - f.bottom) >= 3)
+  // Pre-detect ALL bullish FVGs ≥ 4pt wide
+  const allFVGs = detectFVGs(candles5m).filter(f => f.type === 'bullish' && (f.top - f.bottom) >= 4)
 
   for (const fvg of allFVGs) {
     if (usedFVGs.has(fvg.time)) continue
@@ -1533,11 +1533,12 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     // ATR for dynamic SL sizing
     const atr = getAvgRange(candles5m.slice(Math.max(0, fvgIdx - 14), fvgIdx + 1))
 
-    // ── CONFLUENCE 3: Retrace into FVG zone ──────────────────────────────────
-    // Scan forward for price to come back down to the FVG
+    // ── CONFLUENCE 3: Price must RISE above FVG top first (confirms the gap) ──
+    // Then retrace back into the FVG zone for entry
     const postFVG = candles5m.slice(fvgIdx + 1, Math.min(fvgIdx + 80, candles5m.length))
     let entryCandle = null
     let displacementHigh = fvgCandle.high  // highest point of displacement move
+    let fvgConfirmed = false  // price must trade above FVG top first
 
     for (let k = 0; k < postFVG.length; k++) {
       const c = postFVG[k]
@@ -1546,7 +1547,15 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
       // FVG invalidated if candle closes below bottom by more than 1 ATR
       if (c.close < fvg.bottom - atr) break
 
-      // Retrace: candle low enters FVG zone (between bottom-1 and top+1)
+      // Step 1: Price must push ABOVE the FVG top (confirming the gap is respected)
+      if (!fvgConfirmed) {
+        if (c.close > fvg.top && c.high > fvg.top + 2) {
+          fvgConfirmed = true
+        }
+        continue  // don't look for retrace until FVG is confirmed higher
+      }
+
+      // Step 2: After confirming higher, price retraces BACK into FVG zone
       if (c.low <= fvg.top + 1 && c.low >= fvg.bottom - 1) {
         // Accept if this candle closes bullish (bounce off FVG)
         if (c.close > c.open && c.close > fvg.bottom) {
@@ -1726,17 +1735,156 @@ function runBacktestMomentumLong(candles5m, candles1m, symbol, multiplier) {
   return trades
 }
 
-// ── Combined backtest (long version): mirrors SHORT strategy but keeps only bullish trades
-// Uses the SAME Sweep+BOS and IFVG Midpoint Retrace logic, just filtered to LONG
+// ══════════════════════════════════════════════════════════════════════════════
+// STRATEGY C: Uptrend FVG Tap-Back (LONG only)
+//
+// 1. Detect bullish FVG on 5M in an uptrend (≥2 higher highs + higher lows)
+// 2. FVG must be ≥ 4pt wide
+// 3. Wait for price to tap back into the FVG zone
+// 4. Enter LONG at FVG midpoint on the tap-back candle
+// 5. SL/TP are FIXED at entry — they never move once the trade starts
+// ══════════════════════════════════════════════════════════════════════════════
+const FVG_TAPBACK_MIN_WIDTH = 4
+
+function isUptrendBT(candles, lookback = 6) {
+  if (candles.length < lookback) return false
+  const recent = candles.slice(-lookback)
+  let hh = 0, hl = 0
+  for (let i = 1; i < recent.length; i++) {
+    if (recent[i].high > recent[i - 1].high) hh++
+    if (recent[i].low  > recent[i - 1].low)  hl++
+  }
+  return hh >= 2 && hl >= 2
+}
+
+function detectUptrendFVGsBT(candles, minWidth = FVG_TAPBACK_MIN_WIDTH) {
+  const fvgs = []
+  for (let i = 1; i < candles.length - 1; i++) {
+    const prev = candles[i - 1], next = candles[i + 1]
+    if (next.low > prev.high) {
+      const width = next.low - prev.high
+      if (width < minWidth) continue
+      const priorCandles = candles.slice(0, i + 1)
+      if (!isUptrendBT(priorCandles, 6)) continue
+      fvgs.push({
+        type: 'bullish',
+        top: next.low,
+        bottom: prev.high,
+        mid: (next.low + prev.high) / 2,
+        width,
+        time: candles[i].time,
+        index: i,
+      })
+    }
+  }
+  return fvgs
+}
+
+function findFVGTapBackBT(candles, fvg) {
+  for (const c of candles) {
+    if (c.time <= fvg.time) continue
+    if (c.low <= fvg.top && c.low >= fvg.bottom) return c
+    if (c.close < fvg.bottom) return null
+  }
+  return null
+}
+
+function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
+  const trades = []
+  if (!candles5m.length) return trades
+
+  const units = UNITS[symbol] || 1
+  let lastTradeTime = 0
+  const usedFVGs = new Set()
+  const usedEntryTimes = new Set()
+  const slBounds = LONG_SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
+
+  const uptrendFVGs = detectUptrendFVGsBT(candles5m, FVG_TAPBACK_MIN_WIDTH)
+
+  for (const fvg of uptrendFVGs) {
+    if (!isKillZone(fvg.time)) continue
+
+    const entryCandle = findFVGTapBackBT(candles5m, fvg)
+    if (!entryCandle) continue
+    if (!isKillZone(entryCandle.time)) continue
+    if (entryCandle.time - lastTradeTime < 600) continue
+    if (usedFVGs.has(fvg.time)) continue
+    if (usedEntryTimes.has(entryCandle.time)) continue
+
+    const entryPrice = fvg.mid
+
+    // SL below FVG bottom + buffer — FIXED, never moves
+    let slDist, slPrice
+    const fixedSL = LONG_FIXED_SL[symbol]
+    if (fixedSL != null) {
+      slDist = fixedSL
+    } else {
+      slDist = Math.abs(entryPrice - (fvg.bottom - 2))
+      if (slDist < slBounds.min || slDist > slBounds.max) continue
+    }
+    slPrice = entryPrice - slDist
+
+    // TP: dynamic R:R — FIXED at entry, never moves
+    const rr = LONG_SYMBOL_RR[symbol] || 4
+    const minTPDist = slDist * rr
+    const maxTPDist = minTPDist + 30
+
+    const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
+    const recent5m = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
+    const { highs } = detectSwings(recent5m, 3)
+
+    let tpPrice
+    const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+    tpPrice = targets[0]?.price ?? entryPrice + minTPDist
+
+    if (tpPrice <= entryPrice) continue
+    const tpDist = Math.abs(tpPrice - entryPrice)
+    if (tpDist / slDist < rr) continue
+    if (tpDist / slDist > 16) continue
+
+    // Simulate with FIXED SL/TP — no trailing, no adjustment
+    const ei1m = candles1m.findIndex(c => c.time >= entryCandle.time)
+    const fut1m = candles1m.slice(ei1m + 1, ei1m + 500)
+    const ei5m = candles5m.findIndex(c => c.time >= entryCandle.time)
+    const simCandles = fut1m.length > 0 ? fut1m : candles5m.slice(ei5m + 1, ei5m + 250)
+
+    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+    if (!simResult) continue
+
+    const { outcome, exitPrice, exitTime } = simResult
+    const actualPnl = (exitPrice - entryPrice) * multiplier * units
+
+    trades.push({
+      time: entryCandle.time, exitTime, bias: 'bullish',
+      entryPrice:  parseFloat(entryPrice.toFixed(4)),
+      stopPrice:   parseFloat(slPrice.toFixed(4)),
+      targetPrice: parseFloat(tpPrice.toFixed(4)),
+      exitPrice:   parseFloat(exitPrice.toFixed(4)),
+      outcome, pnlDollars: parseFloat(actualPnl.toFixed(2)),
+      contracts: units,
+      rr: parseFloat((tpDist / slDist).toFixed(2)),
+      signal: 'Uptrend-FVG-TapBack',
+    })
+
+    usedFVGs.add(fvg.time)
+    usedEntryTimes.add(entryCandle.time)
+    lastTradeTime = exitTime || entryCandle.time
+  }
+
+  return trades
+}
+
+// ── Combined backtest (long version): Sweep+BOS + IFVG + Uptrend FVG Tap-Back
 function runBacktestLong(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
 
-  // Run the same strategies as SHORT — they now produce both directions
-  const sweepTrades = runBacktestSweepBOS(candles5m, candles1m || [], symbol, multiplier)
-  const ifvgTrades  = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
+  // Run all three strategies independently
+  const sweepTrades   = runBacktestSweepBOS(candles5m, candles1m || [], symbol, multiplier)
+  const ifvgTrades    = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
+  const tapBackTrades = runBacktestFVGTapBack(candles5m, candles1m || [], symbol, multiplier)
 
   // Filter to only bullish (LONG) trades
-  const allLong = [...sweepTrades, ...ifvgTrades]
+  const allLong = [...sweepTrades, ...ifvgTrades, ...tapBackTrades]
     .filter(t => t.bias === 'bullish')
     .sort((a, b) => a.time - b.time)
 
@@ -1779,10 +1927,11 @@ export default async function handler(req, res) {
     if (sideParam === 'long') {
       // Long backtest — mirrors SHORT strategy (Sweep+BOS + IFVG), filtered to bullish
       if (symbol === 'MGC1!') {
-        // MGC Long: HTF Bias (bullish) + IFVG Mid Retrace (bullish)
-        const htfTrades  = runBacktestMGC(candles5m)
-        const ifvgTrades = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
-        const allMGC = [...htfTrades, ...ifvgTrades]
+        // MGC Long: HTF Bias (bullish) + IFVG Mid Retrace (bullish) + Uptrend FVG Tap-Back
+        const htfTrades     = runBacktestMGC(candles5m)
+        const ifvgTrades    = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
+        const tapBackTrades = runBacktestFVGTapBack(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
+        const allMGC = [...htfTrades, ...ifvgTrades, ...tapBackTrades]
           .filter(t => t.bias === 'bullish')
           .sort((a, b) => a.time - b.time)
         // Dedup: no overlapping trades
