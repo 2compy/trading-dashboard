@@ -307,13 +307,7 @@ function isMGCLongKillZone(ts) {
 
 const MAX_TRADE_DURATION = 86400  // 1 day in seconds
 
-// ── Smart SHORT simulation — let winners run past TP ──────────────────────────
-// Phases:
-//   Phase 1 (0-25% of TP): raw SL, if hit = loss
-//   Phase 2 (25-100% of TP): SL moved to entry - 1 (breakeven)
-//   Phase 3 (TP hit): DON'T exit — switch to trailing mode to ride the move down
-//   Trailing: SL trails at 30% above the low watermark profit (keep 70%)
-//   Time exit after 300 candles at current price
+// ── SHORT simulation — exit at TP, SL, or max 1-day duration ────────────────
 function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300, entryTime = 0) {
   const tpDist = entryPrice - tpPrice
   if (tpDist <= 0) return null
@@ -539,7 +533,7 @@ function runBacktestMGC(candles5m) {
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (tpDist / slDist < (SYMBOL_RR['MGC1!'] || MIN_RR)) continue
 
-    // ── Simulate with trailing stop ────────────────────────────────────────────
+    // ── Simulate trade ─────────────────────────────────────────────────────────
     const entryIdx = candles5m.indexOf(entryCandle)
     const future5m = candles5m.slice(entryIdx + 1, entryIdx + 300)
     const units = UNITS['MGC1!'] || 1
@@ -1309,7 +1303,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (tpDist / slDist < minRR_sym) continue
 
-    // Simulate with trailing stop: use 1m candles if available, else 5m
+    // Simulate trade: use 1m candles if available, else 5m
     const entryIdx1m = candles1m?.length ? candles1m.findIndex(c => c.time >= entryCandle.time) : -1
     const simCandles = entryIdx1m >= 0 && entryIdx1m < candles1m.length - 1
       ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
