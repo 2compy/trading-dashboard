@@ -557,7 +557,7 @@ function runBacktestMGC(candles5m) {
 
     usedFVGs.add(fvg5m.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = exitTime || now5m.time
+    lastTradeTime = now5m.time
   }
 
   return trades
@@ -892,7 +892,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
 
     usedSweeps.add(sweepTime)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = exitTime || now5m.time
+    lastTradeTime = now5m.time
   }
 
   return trades
@@ -1331,7 +1331,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
 
     usedIFVGs.add(ifvg.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = exitTime || entryCandle.time
+    lastTradeTime = entryCandle.time
   }
 
   return trades
