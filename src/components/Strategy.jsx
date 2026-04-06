@@ -1,7 +1,7 @@
 import { FUTURES } from '../store'
 import { CONTRACT_MULTIPLIER } from '../utils/strategy'
 
-const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 6 }
+const SYMBOL_RR = { 'MES1!': 6, 'MNQ1!': 6, 'MGC1!': 6 }
 const UNITS     = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
 const FIXED_SL  = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 12 }
 const FVG_WIDTH = { 'MES1!': 5, 'MNQ1!': 16, 'MGC1!': 4 }
@@ -19,8 +19,8 @@ const SHORT_STRATEGIES = {
     ],
     risk: {
       sl: 'Sweep wick extreme + 2pt buffer (min 5pt, max 30pt)',
-      tp: 'Nearest swing low \u2265 SL \u00d7 4 distance (search window extends 30pt beyond)',
-      rr: '4:1',
+      tp: 'Nearest swing low \u2265 SL \u00d7 6 distance (search window extends 30pt beyond)',
+      rr: '6:1',
       units: '2 contracts',
       cooldown: '5 min between trades, 10 min same-bias dedup',
     },
@@ -37,8 +37,8 @@ const SHORT_STRATEGIES = {
     ],
     risk: {
       sl: 'Fixed 20pt ($40 risk per contract)',
-      tp: 'Nearest swing low \u2265 SL \u00d7 4 distance',
-      rr: '4:1',
+      tp: 'Nearest swing low \u2265 SL \u00d7 6 distance',
+      rr: '6:1',
       units: '2 contracts',
       cooldown: '5 min between trades, 10 min same-bias dedup',
     },
@@ -78,8 +78,8 @@ const LONG_STRATEGIES = {
     ],
     risk: {
       sl: 'Sweep wick extreme + 2pt buffer (min 5pt, max 30pt). Strategy C: below FVG bottom + 2pt buffer. SL is fixed at entry \u2014 never moves.',
-      tp: 'Nearest swing high \u2265 SL \u00d7 4 distance (search window extends 30pt beyond). TP is fixed at entry \u2014 never moves.',
-      rr: '4:1',
+      tp: 'Nearest swing high \u2265 SL \u00d7 6 distance (search window extends 30pt beyond). TP is fixed at entry \u2014 never moves.',
+      rr: '6:1',
       units: '2 contracts',
       cooldown: '5 min between trades, 10 min same-bias dedup',
     },
@@ -97,8 +97,8 @@ const LONG_STRATEGIES = {
     ],
     risk: {
       sl: 'Fixed 20pt ($40 risk per contract). SL is fixed at entry \u2014 never moves.',
-      tp: 'Nearest swing high \u2265 SL \u00d7 4 distance. TP is fixed at entry \u2014 never moves.',
-      rr: '4:1',
+      tp: 'Nearest swing high \u2265 SL \u00d7 6 distance. TP is fixed at entry \u2014 never moves.',
+      rr: '6:1',
       units: '2 contracts',
       cooldown: '5 min between trades, 10 min same-bias dedup',
     },
