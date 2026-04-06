@@ -269,23 +269,23 @@ const DEFAULT_SL_BOUNDS = { min: 3, max: 60 }
 
 // ── LONG-specific overrides ──────────────────────────────────────────────────
 // Much tighter TP (1.2:1 RR) so longs actually reach target
-const LONG_SYMBOL_RR = { 'MES1!': 1.0, 'MNQ1!': 1.0, 'MGC1!': 1.0 }
-const LONG_FIXED_SL  = { 'MES1!': null, 'MNQ1!': 40, 'MGC1!': 20 }
+const LONG_SYMBOL_RR = { 'MES1!': 2.0, 'MNQ1!': 2.0, 'MGC1!': 2.0 }
+const LONG_FIXED_SL  = { 'MES1!': null, 'MNQ1!': 25, 'MGC1!': 12 }
 const LONG_SL_BOUNDS = {
-  'MES1!': { min: 12, max: 50 },
-  'MNQ1!': { min: 15, max: 80 },
-  'MGC1!': { min: 5, max: 40 },
+  'MES1!': { min: 5, max: 30 },
+  'MNQ1!': { min: 5, max: 50 },
+  'MGC1!': { min: 3, max: 25 },
 }
 // Kill zone for longs: NY session only (8:30am–12pm ET) — highest probability for bullish reversals
 function isLongKillZone(ts) {
   const mins = getETMinutes(ts)
-  return (mins >= 510 && mins < 720)   // NY open: 8:30 AM–12:00 PM ET
+  return (mins >= 450 && mins < 780)   // Extended: 7:30 AM–1:00 PM ET
 }
 // MGC longs also get Asia session (8pm–midnight) + NY (8am–noon)
 function isMGCLongKillZone(ts) {
   const mins = getETMinutes(ts)
-  return (mins >= 1200) ||             // Asia: 8:00 PM – midnight ET
-         (mins >= 480 && mins < 720)   // NY:   8:00 AM – noon ET
+  return (mins >= 1140) ||             // Asia: 7:00 PM – midnight ET
+         (mins >= 420 && mins < 780)   // NY:   7:00 AM – 1:00 PM ET
 }
 
 // ── Smart long simulation with breakeven + TP-first + time exit ─────────────
@@ -546,15 +546,22 @@ function runBacktestMGCLong(candles5m) {
     const recent5m = candles5m.slice(Math.max(0, i - 100), i + 1)  // ~8.3hrs of 5m
 
     if (!isMGCLongKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 300) continue
+    if (now5m.time - lastTradeTime < 120) continue
 
-    // ── 1. Check 4H bias is bullish (any recent bullish BOS) ──────────────────
-    const now4hIdx = candles4h.findLastIndex(c => c.time <= now5m.time)
-    if (now4hIdx < 5) continue
-    const recent4h = candles4h.slice(Math.max(0, now4hIdx - 20), now4hIdx + 1)
-    const { highs: h4h, lows: l4h } = detectSwings(recent4h, 2)
-    const bos4h = detectBOS(recent4h, h4h, l4h)
-    if (!bos4h.some(b => b.type === 'bullish')) continue
+    // ── 1. Soft bullish bias: recent 5m close > 20-candle SMA OR any 4H bullish BOS
+    const smaSlice = recent5m.slice(-20)
+    const smaAvg = smaSlice.reduce((s, c) => s + c.close, 0) / smaSlice.length
+    let hasBullishBias = now5m.close > smaAvg
+    if (!hasBullishBias) {
+      const now4hIdx = candles4h.findLastIndex(c => c.time <= now5m.time)
+      if (now4hIdx >= 3) {
+        const recent4h = candles4h.slice(Math.max(0, now4hIdx - 20), now4hIdx + 1)
+        const { highs: h4h, lows: l4h } = detectSwings(recent4h, 2)
+        const bos4h = detectBOS(recent4h, h4h, l4h)
+        hasBullishBias = bos4h.some(b => b.type === 'bullish')
+      }
+    }
+    if (!hasBullishBias) continue
 
     // ── 2. Find swing lows on 5m, check if swept (wick below + close above) ────
     const { highs: h5m, lows: l5m } = detectSwings(recent5m, 2)
@@ -580,7 +587,7 @@ function runBacktestMGCLong(candles5m) {
 
     // ── 3. Find bullish displacement candle after sweep ───────────────────────
     const postSweepIdx = recent5m.indexOf(sweepCandle) + 1
-    const postSweep5m = recent5m.slice(postSweepIdx, Math.min(postSweepIdx + 20, recent5m.length))
+    const postSweep5m = recent5m.slice(postSweepIdx, Math.min(postSweepIdx + 30, recent5m.length))
 
     let displaceCandle = null
     for (const c of postSweep5m) {
@@ -588,7 +595,7 @@ function runBacktestMGCLong(candles5m) {
       if (c.close > c.open) {
         const range = c.high - c.low
         const body = c.close - c.open
-        if (range > 0 && body / range >= 0.45) {
+        if (range > 0 && body / range >= 0.30) {
           displaceCandle = c
           break
         }
@@ -606,7 +613,7 @@ function runBacktestMGCLong(candles5m) {
     const fvgEntryPrice = fvg5m.mid
     const fvgStartIdx = candles5m.findIndex(c => c.time > fvg5m.time)
     if (fvgStartIdx < 0) continue
-    const postFVG = candles5m.slice(fvgStartIdx, fvgStartIdx + 100)
+    const postFVG = candles5m.slice(fvgStartIdx, fvgStartIdx + 150)
 
     let entryCandle = null
     for (const c of postFVG) {
@@ -880,17 +887,24 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
     // MNQ1! — Micro Nasdaq Longs
     // ═══════════════════════════════════════════════════════════════════════════
     if (symbol === 'MNQ1!') {
-      // Kill zone: 8:00-11:30 AM for sweep detection + entries
-      if (!(nowMins >= 480 && nowMins < 690)) continue  // 8:00am-11:30am window
-      if (now5m.time - lastTradeTime < 300) continue
+      // Kill zone: 7:30 AM - 1:00 PM for sweep detection + entries
+      if (!(nowMins >= 450 && nowMins < 780)) continue
+      if (now5m.time - lastTradeTime < 120) continue
 
-      // 1. Check 4H bullish structure (any recent bullish BOS)
-      const now4hIdx = candles4h.findLastIndex(c => c.time <= now5m.time)
-      if (now4hIdx < 3) continue
-      const recent4h = candles4h.slice(Math.max(0, now4hIdx - 20), now4hIdx + 1)
-      const { highs: h4h, lows: l4h } = detectSwings(recent4h, 2)
-      const bos4h = detectBOS(recent4h, h4h, l4h)
-      if (!bos4h.some(b => b.type === 'bullish')) continue
+      // 1. Soft bullish bias: recent 5m close > 20-candle SMA OR any 4H bullish BOS
+      const smaSlice = recent5m.slice(-20)
+      const smaAvg = smaSlice.reduce((s, c) => s + c.close, 0) / smaSlice.length
+      let hasBullishBias = now5m.close > smaAvg
+      if (!hasBullishBias) {
+        const now4hIdx = candles4h.findLastIndex(c => c.time <= now5m.time)
+        if (now4hIdx >= 3) {
+          const recent4h = candles4h.slice(Math.max(0, now4hIdx - 20), now4hIdx + 1)
+          const { highs: h4h, lows: l4h } = detectSwings(recent4h, 2)
+          const bos4h = detectBOS(recent4h, h4h, l4h)
+          hasBullishBias = bos4h.some(b => b.type === 'bullish')
+        }
+      }
+      if (!hasBullishBias) continue
 
       // 2. Find equal lows or swing lows, check if swept
       const { lows: l5m } = detectSwings(recent5m, 2)
@@ -915,14 +929,14 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
 
       // 3. Find bullish displacement candle after sweep
       const postSweepIdx = recent5m.indexOf(sweepCandle) + 1
-      const postSweep5m = recent5m.slice(postSweepIdx, Math.min(postSweepIdx + 20, recent5m.length))
+      const postSweep5m = recent5m.slice(postSweepIdx, Math.min(postSweepIdx + 30, recent5m.length))
 
       let displaceCandle = null
       for (const c of postSweep5m) {
         if (c.close > c.open) {
           const range = c.high - c.low
           const body = c.close - c.open
-          if (range > 0 && body / range >= 0.45) {
+          if (range > 0 && body / range >= 0.30) {
             displaceCandle = c
             break
           }
@@ -940,7 +954,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       const entryPrice = fvg5m.mid
       const fvgStartIdx = candles5m.findIndex(c => c.time > fvg5m.time)
       if (fvgStartIdx < 0) continue
-      const postFVG = candles5m.slice(fvgStartIdx, fvgStartIdx + 100)
+      const postFVG = candles5m.slice(fvgStartIdx, fvgStartIdx + 150)
 
       let entryCandle = null
       for (const c of postFVG) {
@@ -1004,9 +1018,9 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
     // MES1! — Micro S&P Longs
     // ═══════════════════════════════════════════════════════════════════════════
     else if (symbol === 'MES1!') {
-      // Kill zone: 8:00-11:00 AM (480-660 mins)
-      if (!(nowMins >= 480 && nowMins < 660)) continue
-      if (now5m.time - lastTradeTime < 300) continue
+      // Kill zone: 7:30 AM - 1:00 PM (450-780 mins)
+      if (!(nowMins >= 450 && nowMins < 780)) continue
+      if (now5m.time - lastTradeTime < 120) continue
 
       // 1. Bias check: 1H uptrend OR prev day closed bullish
       const now1hIdx = buildHTFCandles(candles5m, 60).findLastIndex(c => c.time <= now5m.time)
@@ -1107,7 +1121,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       // Fallback: search forward in full candles5m with wider window
       if (!entryCandle) {
         const entryOBIdx = candles5m.findIndex(c => c.time >= obCandle.time)
-        const postOBFull = candles5m.slice(entryOBIdx + 1, entryOBIdx + 80)
+        const postOBFull = candles5m.slice(entryOBIdx + 1, entryOBIdx + 120)
         for (const c of postOBFull) {
           if (c.low <= entryPrice && c.close > obBot) {
             entryCandle = c
