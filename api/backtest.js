@@ -251,7 +251,7 @@ function findIFVGEntry(candles, fvg, bias) {
 // ── Fixed SL per symbol (null = use sweep wick) ─────────────────────────────
 const FIXED_SL = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 12 }
 // ── Min R:R per symbol ──────────────────────────────────────────────────────
-const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
+const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 6 }
 // ── Min FVG width for IFVG detection, per symbol ────────────────────────────
 // MGC ~3100 → 3pt, MES ~5500 → 7pt, MNQ ~19000 → 20pt, Silver ~32 → 0.10
 const MIN_FVG_WIDTH = {
@@ -272,7 +272,7 @@ const DEFAULT_SL_BOUNDS = { min: 3, max: 30 }
 // Much tighter TP (1.2:1 RR) so longs actually reach target
 const LONG_MAX_LOSS = 300  // max $300 loss per trade
 // Min payout $300 = 1:1 RR with $300 SL. Trailing stop lets winners run to $1500+
-const LONG_SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
+const LONG_SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 6 }
 // Fixed SL in points = $300 / (multiplier × contracts)
 const LONG_FIXED_SL  = { 'MES1!': 18, 'MNQ1!': 45, 'MGC1!': 10 }
 const LONG_SL_BOUNDS = {

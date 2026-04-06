@@ -1,7 +1,7 @@
 import { FUTURES } from '../store'
 import { CONTRACT_MULTIPLIER } from '../utils/strategy'
 
-const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
+const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 6 }
 const UNITS     = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
 const FIXED_SL  = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 12 }
 const FVG_WIDTH = { 'MES1!': 5, 'MNQ1!': 16, 'MGC1!': 4 }
@@ -55,8 +55,8 @@ const SHORT_STRATEGIES = {
     ],
     risk: {
       sl: 'Fixed 12pt ($120 risk per contract)',
-      tp: 'HTF: nearest 1H swing low beyond entry. IFVG: dynamic \u2265 SL \u00d7 4',
-      rr: '4:1',
+      tp: 'HTF: nearest 1H swing low beyond entry. IFVG: dynamic \u2265 SL \u00d7 6',
+      rr: '6:1',
       units: '2 contracts',
       cooldown: '5 min between trades, 10 min same-bias dedup',
     },
@@ -116,8 +116,8 @@ const LONG_STRATEGIES = {
     ],
     risk: {
       sl: 'Fixed 12pt ($120 risk per contract). SL is fixed at entry \u2014 never moves.',
-      tp: 'HTF: nearest 1H swing high beyond entry. IFVG/FVG Tap-Back: dynamic \u2265 SL \u00d7 4. TP is fixed at entry \u2014 never moves.',
-      rr: '4:1',
+      tp: 'HTF: nearest 1H swing high beyond entry. IFVG/FVG Tap-Back: dynamic \u2265 SL \u00d7 6. TP is fixed at entry \u2014 never moves.',
+      rr: '6:1',
       units: '2 contracts',
       cooldown: '5 min between trades, 10 min same-bias dedup',
     },
