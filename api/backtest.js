@@ -249,7 +249,7 @@ function findIFVGEntry(candles, fvg, bias) {
 }
 
 // ── Fixed SL per symbol (null = use sweep wick) ─────────────────────────────
-const FIXED_SL = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 12 }
+const FIXED_SL = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 20 }
 // ── Min R:R per symbol ──────────────────────────────────────────────────────
 const SYMBOL_RR = { 'MES1!': 6, 'MNQ1!': 6, 'MGC1!': 8 }
 // ── Min FVG width for IFVG detection, per symbol ────────────────────────────
@@ -274,7 +274,7 @@ const LONG_MAX_LOSS = 300  // max $300 loss per trade
 // Min payout $300 = 1:1 RR with $300 SL. Trailing stop lets winners run to $1500+
 const LONG_SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 8 }
 // Fixed SL in points = $300 / (multiplier × contracts)
-const LONG_FIXED_SL  = { 'MES1!': 18, 'MNQ1!': 45, 'MGC1!': 10 }
+const LONG_FIXED_SL  = { 'MES1!': 18, 'MNQ1!': 45, 'MGC1!': 20 }
 const LONG_SL_BOUNDS = {
   'MES1!': { min: 3, max: 18 },
   'MNQ1!': { min: 5, max: 45 },
@@ -288,7 +288,7 @@ function getAvgRange(candles, len = 14) {
 }
 // Cap SL distance so max loss never exceeds $300
 function capLongSL(entryPrice, rawSLPrice, symbol) {
-  const maxSLDist = LONG_FIXED_SL[symbol] || 18
+  const maxSLDist = LONG_FIXED_SL[symbol] || 20
   const rawDist = entryPrice - rawSLPrice
   if (rawDist > maxSLDist) return entryPrice - maxSLDist
   return rawSLPrice

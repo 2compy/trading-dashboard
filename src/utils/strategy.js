@@ -262,7 +262,7 @@ export function calcFuturesPnl(entryPrice, exitPrice, symbol, side) {
 }
 
 const MIN_RR = 6
-const FIXED_SL = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 12 }
+const FIXED_SL = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 20 }
 const SYMBOL_RR = { 'MES1!': 6, 'MNQ1!': 6, 'MGC1!': 8 }
 // Units (contracts) per trade per symbol
 const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
