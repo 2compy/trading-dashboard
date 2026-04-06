@@ -1480,45 +1480,53 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
 
     // 3. Check if price has retraced back into any FVG zone
     for (const fvg of allFVGs) {
-      // Price must have gone above the FVG first (moved away), then come back
-      const fvgIdx = fvgWindow.findIndex(c => c.time >= fvg.time)
-      if (fvgIdx < 0) continue
+      const fvgStartIdx = candles5m.findIndex(c => c.time >= fvg.time)
+      if (fvgStartIdx < 0) continue
 
-      const postFVG = candles5m.slice(
-        candles5m.findIndex(c => c.time >= fvg.time) + 1,
-        candles5m.findIndex(c => c.time >= fvg.time) + 150
-      )
+      const postFVG = candles5m.slice(fvgStartIdx + 1, fvgStartIdx + 150)
 
       let movedAbove = false
-      let entryCandle = null
+      let retracedCandle = null
+      let fvgInvalidated = false
       for (const c of postFVG) {
+        // FVG invalidated: any candle closes below the FVG bottom = broken, skip
+        if (c.close < fvg.bottom) { fvgInvalidated = true; break }
         // Price moved above the FVG top = moved away
         if (c.close > fvg.top) movedAbove = true
-        // Then retraced back into the FVG zone
-        if (movedAbove && c.low <= fvg.top && c.low >= fvg.bottom - 2) {
-          entryCandle = c
+        // Then retraced back into the FVG zone (wick touches FVG top area)
+        if (movedAbove && c.low <= fvg.top && c.low >= fvg.bottom) {
+          retracedCandle = c
           break
         }
       }
-      if (!entryCandle) continue
+      if (fvgInvalidated || !retracedCandle) continue
+
+      // 4. Wait for bullish confirmation candle AFTER the retrace (close > open)
+      const retIdx = candles5m.findIndex(c => c.time >= retracedCandle.time)
+      if (retIdx < 0 || retIdx + 1 >= candles5m.length) continue
+      const confirmCandle = candles5m[retIdx + 1]
+      if (confirmCandle.close <= confirmCandle.open) continue  // must be green candle
+
+      const entryCandle = confirmCandle
       if (usedEntryTimes.has(entryCandle.time)) continue
 
-      // 4. Entry at FVG midpoint
-      const entryPrice = fvg.mid
+      // 5. Entry at the confirmation candle's close (confirmed bounce)
+      const entryPrice = entryCandle.close
 
-      // 5. SL below FVG bottom with small buffer
-      const slPrice = fvg.bottom - 3
+      // 6. SL below the FVG bottom with buffer based on FVG width
+      const fvgWidth = fvg.top - fvg.bottom
+      const slBuffer = Math.max(3, fvgWidth * 0.5)
+      const slPrice = fvg.bottom - slBuffer
 
-      // 6. TP at previous swing highs above entry
+      // 7. TP at previous swing highs or recent high above entry
       const { highs: h5m } = detectSwings(recent5m, 2)
-      const tpCands = h5m.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)
+      const tpCands = h5m.filter(h => h.price > entryPrice + 2).sort((a, b) => a.price - b.price)
 
-      // Also check for recent high of the move
-      const recentHigh = Math.max(...recent5m.slice(-15).map(c => c.high))
+      const recentHigh = Math.max(...recent5m.slice(-20).map(c => c.high))
       let tpPrice = null
       if (tpCands.length) {
         tpPrice = tpCands[0].price
-      } else if (recentHigh > entryPrice) {
+      } else if (recentHigh > entryPrice + 2) {
         tpPrice = recentHigh
       }
       if (!tpPrice || tpPrice <= entryPrice) continue
@@ -1529,7 +1537,7 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
       if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 2.0)) continue
       if (tpDist / slDist > 16) continue
 
-      // 7. Simulate trade
+      // 8. Simulate trade
       const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
       const future1m = candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
       const entryIdx5m = candles5m.findIndex(c => c.time >= entryCandle.time)
