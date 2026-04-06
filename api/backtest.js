@@ -249,7 +249,7 @@ function findIFVGEntry(candles, fvg, bias) {
 }
 
 // ── Fixed SL per symbol (null = use sweep wick) ─────────────────────────────
-const FIXED_SL = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20 }
+const FIXED_SL = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 12 }
 // ── Min R:R per symbol ──────────────────────────────────────────────────────
 const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 // ── Min FVG width for IFVG detection, per symbol ────────────────────────────
@@ -262,11 +262,11 @@ const MIN_FVG_WIDTH = {
 const DEFAULT_FVG_WIDTH = 5
 // ── SL distance bounds per symbol ───────────────────────────────────────────
 const SL_BOUNDS = {
-  'MES1!': { min: 3, max: 60 },
-  'MNQ1!': { min: 10, max: 100 },
-  'MGC1!': { min: 2, max: 40 },
+  'MES1!': { min: 3, max: 30 },
+  'MNQ1!': { min: 5, max: 50 },
+  'MGC1!': { min: 2, max: 20 },
 }
-const DEFAULT_SL_BOUNDS = { min: 3, max: 60 }
+const DEFAULT_SL_BOUNDS = { min: 3, max: 30 }
 
 // ── LONG-specific overrides ──────────────────────────────────────────────────
 // Much tighter TP (1.2:1 RR) so longs actually reach target
@@ -274,11 +274,11 @@ const LONG_MAX_LOSS = 300  // max $300 loss per trade
 // Min payout $300 = 1:1 RR with $300 SL. Trailing stop lets winners run to $1500+
 const LONG_SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 // Fixed SL in points = $300 / (multiplier × contracts)
-const LONG_FIXED_SL  = { 'MES1!': 30, 'MNQ1!': 75, 'MGC1!': 15 }
+const LONG_FIXED_SL  = { 'MES1!': 18, 'MNQ1!': 45, 'MGC1!': 10 }
 const LONG_SL_BOUNDS = {
-  'MES1!': { min: 5, max: 30 },
-  'MNQ1!': { min: 10, max: 75 },
-  'MGC1!': { min: 3, max: 15 },
+  'MES1!': { min: 3, max: 18 },
+  'MNQ1!': { min: 5, max: 45 },
+  'MGC1!': { min: 2, max: 10 },
 }
 // ATR-like volatility measure for dynamic SL sizing
 function getAvgRange(candles, len = 14) {
@@ -288,7 +288,7 @@ function getAvgRange(candles, len = 14) {
 }
 // Cap SL distance so max loss never exceeds $300
 function capLongSL(entryPrice, rawSLPrice, symbol) {
-  const maxSLDist = LONG_FIXED_SL[symbol] || 30
+  const maxSLDist = LONG_FIXED_SL[symbol] || 18
   const rawDist = entryPrice - rawSLPrice
   if (rawDist > maxSLDist) return entryPrice - maxSLDist
   return rawSLPrice

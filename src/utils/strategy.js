@@ -262,7 +262,7 @@ export function calcFuturesPnl(entryPrice, exitPrice, symbol, side) {
 }
 
 const MIN_RR = 4
-const FIXED_SL = { 'MES1!': null, 'MNQ1!': 35, 'MGC1!': 20 }
+const FIXED_SL = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 12 }
 const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 // Units (contracts) per trade per symbol
 const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
@@ -275,11 +275,11 @@ const MIN_FVG_WIDTH = {
 const DEFAULT_FVG_WIDTH = 5
 // Per-symbol SL distance bounds
 const SL_BOUNDS = {
-  'MES1!': { min: 3, max: 60 },
-  'MNQ1!': { min: 10, max: 100 },
-  'MGC1!': { min: 2, max: 40 },
+  'MES1!': { min: 3, max: 30 },
+  'MNQ1!': { min: 5, max: 50 },
+  'MGC1!': { min: 2, max: 20 },
 }
-const DEFAULT_SL_BOUNDS = { min: 3, max: 60 }
+const DEFAULT_SL_BOUNDS = { min: 3, max: 30 }
 
 // ── Sweep detection helper ──────────────────────────────────────────────────
 function findSweep(recent5m, candles5m, nowTs) {
@@ -411,10 +411,10 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
       slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
     } else {
       slPrice = bias === 'bullish' ? sweepWickExtreme - 2 : sweepWickExtreme + 2
-      if (bias === 'bullish' && entryPrice - slPrice < 10) slPrice = entryPrice - 10
-      if (bias === 'bearish' && slPrice - entryPrice < 10) slPrice = entryPrice + 10
+      if (bias === 'bullish' && entryPrice - slPrice < 5) slPrice = entryPrice - 5
+      if (bias === 'bearish' && slPrice - entryPrice < 5) slPrice = entryPrice + 5
       slDist = Math.abs(entryPrice - slPrice)
-      if (slDist > 60) continue
+      if (slDist > 30) continue
     }
 
     const rr = SYMBOL_RR[symbol] || MIN_RR
