@@ -1449,15 +1449,132 @@ function runBacktest(candles5m, candles1m, symbol) {
   return final
 }
 
+// ── FVG Retrace Long: uptrend + bullish FVG (≥3pt) + retrace into FVG → long to prev highs ─
+function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
+  const trades = []
+  if (!candles5m.length) return trades
+
+  const units = UNITS[symbol] || 1
+  let lastTradeTime = 0
+  const usedEntryTimes = new Set()
+
+  for (let i = 40; i < candles5m.length - 1; i++) {
+    const now5m = candles5m[i]
+    const mins = getETMinutes(now5m.time)
+
+    // Kill zone: 7:30 AM - 1:00 PM ET
+    if (!(mins >= 450 && mins < 780)) continue
+    if (now5m.time - lastTradeTime < 120) continue
+
+    const recent5m = candles5m.slice(Math.max(0, i - 60), i + 1)
+
+    // 1. Uptrend check: price above 20-candle SMA
+    const sma20 = recent5m.slice(-20)
+    const smaAvg = sma20.reduce((s, c) => s + c.close, 0) / sma20.length
+    if (now5m.close <= smaAvg) continue
+
+    // 2. Detect bullish FVGs in recent candles (last 30 candles)
+    const fvgWindow = recent5m.slice(-30)
+    const allFVGs = detectFVGs(fvgWindow).filter(f => f.type === 'bullish' && (f.top - f.bottom) >= 3)
+    if (!allFVGs.length) continue
+
+    // 3. Check if price has retraced back into any FVG zone
+    for (const fvg of allFVGs) {
+      // Price must have gone above the FVG first (moved away), then come back
+      const fvgIdx = fvgWindow.findIndex(c => c.time >= fvg.time)
+      if (fvgIdx < 0) continue
+
+      const postFVG = candles5m.slice(
+        candles5m.findIndex(c => c.time >= fvg.time) + 1,
+        candles5m.findIndex(c => c.time >= fvg.time) + 150
+      )
+
+      let movedAbove = false
+      let entryCandle = null
+      for (const c of postFVG) {
+        // Price moved above the FVG top = moved away
+        if (c.close > fvg.top) movedAbove = true
+        // Then retraced back into the FVG zone
+        if (movedAbove && c.low <= fvg.top && c.low >= fvg.bottom - 2) {
+          entryCandle = c
+          break
+        }
+      }
+      if (!entryCandle) continue
+      if (usedEntryTimes.has(entryCandle.time)) continue
+
+      // 4. Entry at FVG midpoint
+      const entryPrice = fvg.mid
+
+      // 5. SL below FVG bottom with small buffer
+      const slPrice = fvg.bottom - 3
+
+      // 6. TP at previous swing highs above entry
+      const { highs: h5m } = detectSwings(recent5m, 2)
+      const tpCands = h5m.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)
+
+      // Also check for recent high of the move
+      const recentHigh = Math.max(...recent5m.slice(-15).map(c => c.high))
+      let tpPrice = null
+      if (tpCands.length) {
+        tpPrice = tpCands[0].price
+      } else if (recentHigh > entryPrice) {
+        tpPrice = recentHigh
+      }
+      if (!tpPrice || tpPrice <= entryPrice) continue
+
+      const slDist = Math.abs(entryPrice - slPrice)
+      const tpDist = Math.abs(tpPrice - entryPrice)
+      if (slDist === 0 || tpDist <= 0) continue
+      if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 2.0)) continue
+      if (tpDist / slDist > 16) continue
+
+      // 7. Simulate trade
+      const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
+      const future1m = candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
+      const entryIdx5m = candles5m.findIndex(c => c.time >= entryCandle.time)
+      const simCandles = future1m.length > 0 ? future1m : candles5m.slice(entryIdx5m + 1, entryIdx5m + 200)
+
+      const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+      if (!simResult) continue
+
+      const { outcome, exitPrice, exitTime } = simResult
+      const actualPnl = (exitPrice - entryPrice) * multiplier * units
+
+      trades.push({
+        time: entryCandle.time,
+        exitTime,
+        bias: 'bullish',
+        entryPrice: parseFloat(entryPrice.toFixed(4)),
+        stopPrice: parseFloat(slPrice.toFixed(4)),
+        targetPrice: parseFloat(tpPrice.toFixed(4)),
+        exitPrice: parseFloat(exitPrice.toFixed(4)),
+        outcome,
+        pnlDollars: parseFloat(actualPnl.toFixed(2)),
+        contracts: units,
+        rr: parseFloat((tpDist / slDist).toFixed(2)),
+        signal: 'FVG-Retrace-Long',
+      })
+
+      usedEntryTimes.add(entryCandle.time)
+      lastTradeTime = entryCandle.time
+      break  // one trade per FVG scan pass
+    }
+  }
+
+  return trades
+}
+
 // ── Combined backtest (long version): merge long strategies, dedup aggressively ─
 function runBacktestLong(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
 
-  // Run ONLY the user's custom long strategy (no IFVG mid retrace — that's a short strategy)
+  // Run custom long strategies + FVG retrace
   const sweepTrades = runBacktestSweepBOSLong(candles5m, candles1m || [], symbol, multiplier)
+  const fvgRetraceTrades = runBacktestFVGRetraceLong(candles5m, candles1m || [], symbol, multiplier)
 
   // Sort by entry time
-  const all = [...sweepTrades].sort((a, b) => a.time - b.time)
+  const all = [...sweepTrades, ...fvgRetraceTrades].sort((a, b) => a.time - b.time)
 
   // Aggressive dedup:
   //  1. Exact same entry timestamp = duplicate (drop the second)
@@ -1509,10 +1626,24 @@ export default async function handler(req, res) {
     if (sideParam === 'long') {
       // Long backtest
       if (symbol === 'MGC1!') {
-        // MGC Long: ONLY the user's custom strategy (4H bullish + swing low sweep + displacement + FVG)
-        trades = runBacktestMGCLong(candles5m)
-        // Assign IDs
-        trades.forEach((t, i) => { t.id = i + 1 })
+        // MGC Long: custom strategy + FVG retrace
+        const mgcTrades = runBacktestMGCLong(candles5m)
+        const fvgTrades = runBacktestFVGRetraceLong(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
+        const allMGC = [...mgcTrades, ...fvgTrades].sort((a, b) => a.time - b.time)
+        // Dedup
+        trades = []
+        const usedTimesL = new Set()
+        for (const t of allMGC) {
+          if (usedTimesL.has(t.time)) continue
+          let dominated = false
+          for (const prev of trades) {
+            if (t.time - prev.time < 120) { dominated = true; break }
+          }
+          if (dominated) continue
+          t.id = trades.length + 1
+          trades.push(t)
+          usedTimesL.add(t.time)
+        }
       } else {
         trades = runBacktestLong(candles5m, candles1m, symbol)
       }
