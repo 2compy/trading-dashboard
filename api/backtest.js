@@ -641,6 +641,7 @@ function runBacktestMGCLong(candles5m) {
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (slDist === 0 || tpDist <= 0) continue
     if (tpDist / slDist < (LONG_SYMBOL_RR['MGC1!'] || 1.2)) continue
+    if (tpDist / slDist > 16) continue
 
     // ── Simulate trade ────────────────────────────────────────────────────────
     const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
@@ -981,6 +982,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       const tpDist = Math.abs(tpPrice - entryPrice)
       if (slDist === 0 || tpDist <= 0) continue
       if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 1.2)) continue
+      if (tpDist / slDist > 16) continue
 
       // Simulate on 1m data if available
       const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
@@ -1153,6 +1155,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       const tpDist = Math.abs(tpPrice - entryPrice)
       if (slDist === 0 || tpDist <= 0) continue
       if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 1.2)) continue
+      if (tpDist / slDist > 16) continue
 
       // Simulate trade
       const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
@@ -1262,6 +1265,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
 
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (tpDist / slDist < minRR_sym) continue
+    if (tpDist / slDist > 16) continue
 
     // Simulate: use 1m candles if available, else 5m
     const entryIdx1m = candles1m?.length ? candles1m.findIndex(c => c.time >= entryCandle.time) : -1
@@ -1371,6 +1375,7 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
 
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (tpDist / slDist < minRR_sym) continue
+    if (tpDist / slDist > 16) continue
 
     // Smart long simulation (TP-first, breakeven, time exit)
     const entryIdx1m = candles1m?.length ? candles1m.findIndex(c => c.time >= entryCandle.time) : -1
