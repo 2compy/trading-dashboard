@@ -269,12 +269,18 @@ const DEFAULT_SL_BOUNDS = { min: 3, max: 60 }
 
 // ── LONG-specific overrides ──────────────────────────────────────────────────
 // Much tighter TP (1.2:1 RR) so longs actually reach target
-const LONG_SYMBOL_RR = { 'MES1!': 1.5, 'MNQ1!': 1.5, 'MGC1!': 1.5 }
-const LONG_FIXED_SL  = { 'MES1!': null, 'MNQ1!': 30, 'MGC1!': 15 }
+const LONG_SYMBOL_RR = { 'MES1!': 1.0, 'MNQ1!': 1.0, 'MGC1!': 1.0 }
+const LONG_FIXED_SL  = { 'MES1!': null, 'MNQ1!': 40, 'MGC1!': 20 }
 const LONG_SL_BOUNDS = {
-  'MES1!': { min: 6, max: 40 },
-  'MNQ1!': { min: 8, max: 60 },
-  'MGC1!': { min: 4, max: 30 },
+  'MES1!': { min: 8, max: 50 },
+  'MNQ1!': { min: 10, max: 80 },
+  'MGC1!': { min: 5, max: 35 },
+}
+// ATR-like volatility measure for dynamic SL sizing
+function getAvgRange(candles, len = 14) {
+  const slice = candles.slice(-len)
+  if (!slice.length) return 10
+  return slice.reduce((s, c) => s + (c.high - c.low), 0) / slice.length
 }
 // Kill zone for longs: NY session only (8:30am–12pm ET) — highest probability for bullish reversals
 function isLongKillZone(ts) {
@@ -288,16 +294,18 @@ function isMGCLongKillZone(ts) {
          (mins >= 420 && mins < 780)   // NY:   7:00 AM – 1:00 PM ET
 }
 
-// ── Smart long simulation with trailing stop + TP-first + time exit ──────────
-// 1. Check TP BEFORE SL on same candle (bullish bias)
-// 2. After price moves 30% toward TP, move SL to entry (breakeven)
-// 3. After 60% toward TP, trail SL to lock in 30% of move
-// 4. If neither hit after 250 candles, exit at close
-function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 250) {
+// ── Smart long simulation — optimized for high win rate ──────────────────────
+// Key principles:
+//   - Check TP before SL on each candle (if both hit, TP wins)
+//   - Aggressive breakeven: move SL to entry+1 after just 25% toward TP
+//   - Trailing stop: after 50% toward TP, trail SL keeping 35% of TP dist below high
+//   - Time exit after 200 candles — exit at close
+function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 200) {
   let currentSL = slPrice
   const tpDist = tpPrice - entryPrice
-  const beThreshold = entryPrice + tpDist * 0.3   // move to BE after 30% of TP reached
-  const trailThreshold = entryPrice + tpDist * 0.6 // trail SL after 60% reached
+  if (tpDist <= 0) return null
+  const beThreshold    = entryPrice + tpDist * 0.25  // BE after 25% of TP
+  const trailThreshold = entryPrice + tpDist * 0.50  // trail after 50% of TP
   let beMoved = false
   let trailing = false
   let highestHigh = entryPrice
@@ -305,45 +313,42 @@ function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles 
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
 
-    // Track highest high for trailing
+    // Track highest high
     if (fc.high > highestHigh) highestHigh = fc.high
 
-    // Check TP first (bullish bias — if candle touches both, TP wins)
+    // TP hit — always check first
     if (fc.high >= tpPrice) {
       return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time }
     }
 
-    // Breakeven logic: once price reached 30% of TP, move SL to entry + 1
+    // Breakeven: after 25% of move, lock in entry + 1pt
     if (!beMoved && fc.high >= beThreshold) {
       currentSL = entryPrice + 1
       beMoved = true
     }
 
-    // Trailing logic: once price reached 60% of TP, trail SL to lock in 30% of move
+    // Trailing: after 50% of move, trail SL to lock in profits
     if (!trailing && fc.high >= trailThreshold) {
       trailing = true
     }
     if (trailing) {
-      const trailSL = highestHigh - tpDist * 0.4  // keep SL 40% of TP dist below highest
+      const trailSL = highestHigh - tpDist * 0.35
       if (trailSL > currentSL) currentSL = trailSL
     }
 
-    // Check SL (uses potentially moved-up breakeven/trailing stop)
+    // SL hit
     if (fc.low <= currentSL) {
-      const exitPrice = currentSL
-      const outcome = exitPrice > entryPrice ? 'win' : 'loss'
-      return { outcome, exitPrice, exitTime: fc.time }
+      const outcome = currentSL > entryPrice ? 'win' : 'loss'
+      return { outcome, exitPrice: currentSL, exitTime: fc.time }
     }
   }
 
-  // Time exit: close at last candle's close price
+  // Time exit
   if (simCandles.length > 0) {
-    const lastIdx = Math.min(simCandles.length - 1, maxCandles - 1)
-    const lastCandle = simCandles[lastIdx]
+    const lastCandle = simCandles[Math.min(simCandles.length - 1, maxCandles - 1)]
     const outcome = lastCandle.close > entryPrice ? 'win' : 'loss'
     return { outcome, exitPrice: lastCandle.close, exitTime: lastCandle.time }
   }
-
   return null
 }
 
@@ -1465,7 +1470,22 @@ function runBacktest(candles5m, candles1m, symbol) {
   return final
 }
 
-// ── FVG Retrace Long: uptrend + bullish FVG (≥3pt) + retrace into FVG → long to prev highs ─
+// ══════════════════════════════════════════════════════════════════════════════
+// FVG RETRACE LONG — ICT Displacement + FVG Discount Entry
+//
+// The edge: Displacement candles (big body bullish candles) show smart money
+// buying aggressively. The FVG left behind is the "discount zone" where
+// institutions want to reload. When price retraces to this zone, we enter
+// with momentum already confirmed in our direction.
+//
+// Confluences:
+//   1. Bullish displacement (large body candle or 2+ consecutive green candles)
+//   2. Bullish FVG created by the displacement (≥3pt gap)
+//   3. Price retraces into FVG zone (wicks into or near it)
+//   4. Entry on bounce (bullish candle at FVG zone)
+//   5. SL below FVG with ATR-based buffer (wide enough for noise)
+//   6. TP at displacement high or nearest swing high (price already went there)
+// ══════════════════════════════════════════════════════════════════════════════
 function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
   const trades = []
   if (!candles5m.length) return trades
@@ -1474,106 +1494,111 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
   let lastTradeTime = 0
   const usedFVGs = new Set()
 
-  // Pre-detect ALL bullish FVGs across the entire dataset (≥3pt width)
+  // Pre-detect ALL bullish FVGs ≥ 3pt
   const allFVGs = detectFVGs(candles5m).filter(f => f.type === 'bullish' && (f.top - f.bottom) >= 3)
 
   for (const fvg of allFVGs) {
     if (usedFVGs.has(fvg.time)) continue
 
-    const fvgStartIdx = candles5m.findIndex(c => c.time >= fvg.time)
-    if (fvgStartIdx < 10 || fvgStartIdx >= candles5m.length - 5) continue
+    const fvgIdx = candles5m.findIndex(c => c.time >= fvg.time)
+    if (fvgIdx < 15 || fvgIdx >= candles5m.length - 5) continue
 
-    // Kill zone: 7:00 AM – 2:00 PM ET (very wide to get more trades)
+    // Kill zone: 7:00 AM – 3:00 PM ET
     const fvgMins = getETMinutes(fvg.time)
-    if (!(fvgMins >= 420 && fvgMins < 840)) continue
+    if (!(fvgMins >= 420 && fvgMins < 900)) continue
 
-    // 1. Uptrend: the candle that created the FVG must be bullish (close > open)
-    //    AND the FVG candle's close must be above the close from 5 candles ago
-    const fvgCandle = candles5m[fvgStartIdx]
-    if (fvgCandle.close <= fvgCandle.open) continue  // FVG candle must be green
-    const lookbackIdx = Math.max(0, fvgStartIdx - 5)
-    if (fvgCandle.close <= candles5m[lookbackIdx].close) continue
+    // ── CONFLUENCE 1: Displacement confirmation ──────────────────────────────
+    // The candles around the FVG must show bullish displacement:
+    //   - The FVG candle itself is bullish with body ≥ 30% of range, OR
+    //   - 2 of the 3 candles around FVG are bullish
+    const fvgCandle = candles5m[fvgIdx]
+    const nearby3 = candles5m.slice(Math.max(0, fvgIdx - 1), fvgIdx + 2)
+    const bullishCount = nearby3.filter(c => c.close > c.open).length
+    const fvgBody = Math.abs(fvgCandle.close - fvgCandle.open)
+    const fvgRange = fvgCandle.high - fvgCandle.low
+    const hasDisplacement = (fvgCandle.close > fvgCandle.open && fvgRange > 0 && fvgBody / fvgRange >= 0.30) || bullishCount >= 2
+    if (!hasDisplacement) continue
 
-    // 2. Scan forward: find ANY candle that wicks into or through the FVG zone
-    const postFVG = candles5m.slice(fvgStartIdx + 1, Math.min(fvgStartIdx + 100, candles5m.length))
+    // ── CONFLUENCE 2: Price context — recent price action trending up ────────
+    // Simple: close of FVG candle > close from 5 candles ago
+    const lb = Math.max(0, fvgIdx - 5)
+    if (fvgCandle.close <= candles5m[lb].close) continue
+
+    // ATR for dynamic SL sizing
+    const atr = getAvgRange(candles5m.slice(Math.max(0, fvgIdx - 14), fvgIdx + 1))
+
+    // ── CONFLUENCE 3: Retrace into FVG zone ──────────────────────────────────
+    // Scan forward for price to come back down to the FVG
+    const postFVG = candles5m.slice(fvgIdx + 1, Math.min(fvgIdx + 80, candles5m.length))
     let entryCandle = null
-    let highBeforeRetrace = 0
+    let displacementHigh = fvgCandle.high  // highest point of displacement move
 
     for (let k = 0; k < postFVG.length; k++) {
       const c = postFVG[k]
+      if (c.high > displacementHigh) displacementHigh = c.high
 
-      // Track high of the move (for TP target)
-      if (c.high > highBeforeRetrace) highBeforeRetrace = c.high
+      // FVG invalidated if candle closes below bottom by more than 1 ATR
+      if (c.close < fvg.bottom - atr) break
 
-      // FVG invalidated: candle closes below FVG bottom - 2pt buffer
-      if (c.close < fvg.bottom - 2) break
-
-      // Retrace: candle low touches FVG zone (between bottom and top)
-      if (c.low <= fvg.top && c.low >= fvg.bottom - 1) {
-        // Accept if candle closes bullish (bounce)
-        if (c.close > c.open) {
-          entryCandle = c
-          break
+      // Retrace: candle low enters FVG zone (between bottom-1 and top+1)
+      if (c.low <= fvg.top + 1 && c.low >= fvg.bottom - 1) {
+        // Accept if this candle closes bullish (bounce off FVG)
+        if (c.close > c.open && c.close > fvg.bottom) {
+          entryCandle = c; break
         }
-        // Or if next candle is bullish (delayed bounce)
-        if (k + 1 < postFVG.length && postFVG[k + 1].close > postFVG[k + 1].open) {
-          entryCandle = postFVG[k + 1]
-          break
+        // Or next candle closes bullish
+        if (k + 1 < postFVG.length) {
+          const n = postFVG[k + 1]
+          if (n.close > n.open && n.close > fvg.bottom) { entryCandle = n; break }
         }
-        // Or if candle after next is bullish (2-candle delay)
-        if (k + 2 < postFVG.length && postFVG[k + 2].close > postFVG[k + 2].open) {
-          entryCandle = postFVG[k + 2]
-          break
+        // Or 2 candles later
+        if (k + 2 < postFVG.length) {
+          const n = postFVG[k + 2]
+          if (n.close > n.open && n.close > fvg.bottom) { entryCandle = n; break }
         }
       }
     }
     if (!entryCandle) continue
-    if (entryCandle.time - lastTradeTime < 60) continue  // 1min cooldown only
+    if (entryCandle.time - lastTradeTime < 60) continue
 
-    // 3. Entry at the candle close
+    // ── ENTRY ────────────────────────────────────────────────────────────────
     const entryPrice = entryCandle.close
 
-    // 4. SL below the FVG bottom with comfortable buffer
-    const fvgWidth = fvg.top - fvg.bottom
-    const slBuffer = Math.max(3, fvgWidth * 0.6)
+    // ── SL: below FVG with ATR-based buffer (wide = survivable) ─────────────
+    const slBuffer = Math.max(3, atr * 0.8)
     const slPrice = fvg.bottom - slBuffer
 
-    // 5. TP: use high of the move before retrace (price already went there)
-    //    OR the FVG top + 2x the FVG width as minimum target
-    const minTarget = fvg.top + fvgWidth * 1.5
-    let tpPrice = highBeforeRetrace > entryPrice ? highBeforeRetrace : null
+    // ── TP: displacement high (price already went there once) ────────────────
+    // This is the key insight — we're targeting a level price ALREADY hit,
+    // so the probability of reaching it again after a healthy retrace is high.
+    let tpPrice = displacementHigh
 
-    // Also check swing highs
+    // Also consider nearest swing high if it's closer
     const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
     const lookback = candles5m.slice(Math.max(0, entryIdx - 40), entryIdx + 1)
-    const { highs: h5m } = detectSwings(lookback, 2)
-    const tpCands = h5m.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)
-    if (tpCands.length && (!tpPrice || tpCands[0].price < tpPrice)) {
-      tpPrice = tpCands[0].price
+    const { highs: swH } = detectSwings(lookback, 2)
+    const nearestHigh = swH.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)[0]
+    if (nearestHigh && nearestHigh.price < tpPrice && nearestHigh.price > entryPrice) {
+      tpPrice = nearestHigh.price  // take the closer, more achievable target
     }
 
-    // Fallback: use minimum target
-    if (!tpPrice || tpPrice <= entryPrice) tpPrice = minTarget
     if (tpPrice <= entryPrice) continue
 
     const slDist = Math.abs(entryPrice - slPrice)
     const tpDist = Math.abs(tpPrice - entryPrice)
-    if (slDist === 0 || tpDist <= 0) continue
+    if (slDist <= 0 || tpDist <= 0) continue
+    if (tpDist / slDist > 16) continue
 
-    // R:R filter: 1.5 min, 16 max
-    const minRR = LONG_SYMBOL_RR[symbol] || 1.5
-    if (tpDist / slDist < minRR) {
-      // Bump TP to meet minimum R:R (small extension is OK with 1.5:1)
-      tpPrice = entryPrice + slDist * minRR
-    }
+    // If TP is very close (< 1:1), bump it to at least 1:1
+    if (tpDist < slDist) tpPrice = entryPrice + slDist
+
     const finalTPDist = Math.abs(tpPrice - entryPrice)
-    if (finalTPDist / slDist > 16) continue
 
-    // 6. Simulate trade
-    const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
-    const future1m = candles1m.slice(entryIdx1m + 1, entryIdx1m + 500)
-    const entryIdx5m = candles5m.findIndex(c => c.time >= entryCandle.time)
-    const simCandles = future1m.length > 0 ? future1m : candles5m.slice(entryIdx5m + 1, entryIdx5m + 250)
+    // ── SIMULATE ─────────────────────────────────────────────────────────────
+    const ei1m = candles1m.findIndex(c => c.time >= entryCandle.time)
+    const fut1m = candles1m.slice(ei1m + 1, ei1m + 500)
+    const ei5m = candles5m.findIndex(c => c.time >= entryCandle.time)
+    const simCandles = fut1m.length > 0 ? fut1m : candles5m.slice(ei5m + 1, ei5m + 250)
 
     const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
     if (!simResult) continue
@@ -1582,15 +1607,12 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     const actualPnl = (exitPrice - entryPrice) * multiplier * units
 
     trades.push({
-      time: entryCandle.time,
-      exitTime,
-      bias: 'bullish',
-      entryPrice: parseFloat(entryPrice.toFixed(4)),
-      stopPrice: parseFloat(slPrice.toFixed(4)),
+      time: entryCandle.time, exitTime, bias: 'bullish',
+      entryPrice:  parseFloat(entryPrice.toFixed(4)),
+      stopPrice:   parseFloat(slPrice.toFixed(4)),
       targetPrice: parseFloat(tpPrice.toFixed(4)),
-      exitPrice: parseFloat(exitPrice.toFixed(4)),
-      outcome,
-      pnlDollars: parseFloat(actualPnl.toFixed(2)),
+      exitPrice:   parseFloat(exitPrice.toFixed(4)),
+      outcome, pnlDollars: parseFloat(actualPnl.toFixed(2)),
       contracts: units,
       rr: parseFloat((finalTPDist / slDist).toFixed(2)),
       signal: 'FVG-Retrace-Long',
@@ -1603,16 +1625,109 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
   return trades
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// BULLISH MOMENTUM CONTINUATION — Enter on pullback in strong uptrend
+//
+// When price shows clear bullish momentum (3+ green candles making higher
+// highs), wait for a 1-2 candle pullback, then enter long targeting the
+// most recent high. This is a high-probability trend continuation play.
+// ══════════════════════════════════════════════════════════════════════════════
+function runBacktestMomentumLong(candles5m, candles1m, symbol, multiplier) {
+  const trades = []
+  if (!candles5m.length) return trades
+
+  const units = UNITS[symbol] || 1
+  let lastTradeTime = 0
+
+  for (let i = 20; i < candles5m.length - 2; i++) {
+    const now = candles5m[i]
+    const mins = getETMinutes(now.time)
+    if (!(mins >= 420 && mins < 900)) continue
+    if (now.time - lastTradeTime < 60) continue
+
+    // 1. Find bullish momentum: 3+ of last 5 candles are bullish with higher highs
+    const window5 = candles5m.slice(i - 4, i + 1)
+    const greenCount = window5.filter(c => c.close > c.open).length
+    if (greenCount < 3) continue
+
+    // Higher highs check: at least 2 consecutive higher highs in window
+    let hhCount = 0
+    for (let j = 1; j < window5.length; j++) {
+      if (window5[j].high > window5[j - 1].high) hhCount++
+    }
+    if (hhCount < 2) continue
+
+    // 2. Current candle or previous is a pullback (red candle or lower close)
+    const isPullback = (now.close < now.open) ||
+                       (candles5m[i - 1].close < candles5m[i - 1].open)
+    if (!isPullback) continue
+
+    // 3. Pullback didn't break structure — current low is above the low of 3 candles ago
+    if (now.low < candles5m[i - 3].low) continue
+
+    // 4. Entry on the next bullish candle after pullback
+    const next = candles5m[i + 1]
+    if (next.close <= next.open) continue  // need green confirmation
+    const entryCandle = next
+    const entryPrice = entryCandle.close
+
+    // 5. SL below the pullback low with ATR buffer
+    const atr = getAvgRange(candles5m.slice(Math.max(0, i - 14), i + 1))
+    const pullbackLow = Math.min(now.low, candles5m[i - 1].low)
+    const slPrice = pullbackLow - Math.max(2, atr * 0.5)
+
+    // 6. TP at the momentum high (price already reached this level)
+    const momentumHigh = Math.max(...window5.map(c => c.high))
+    let tpPrice = momentumHigh
+    if (tpPrice <= entryPrice) tpPrice = entryPrice + atr  // fallback: 1 ATR target
+
+    const slDist = Math.abs(entryPrice - slPrice)
+    const tpDist = Math.abs(tpPrice - entryPrice)
+    if (slDist <= 0 || tpDist <= 0) continue
+    if (tpDist / slDist > 16) continue
+    if (tpDist < slDist * 0.5) continue  // skip if TP is less than half the risk
+
+    // Simulate
+    const ei5m = candles5m.findIndex(c => c.time >= entryCandle.time)
+    const ei1m = candles1m.findIndex(c => c.time >= entryCandle.time)
+    const fut1m = candles1m.slice(ei1m + 1, ei1m + 500)
+    const simCandles = fut1m.length > 0 ? fut1m : candles5m.slice(ei5m + 1, ei5m + 250)
+
+    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+    if (!simResult) continue
+
+    const { outcome, exitPrice, exitTime } = simResult
+    const actualPnl = (exitPrice - entryPrice) * multiplier * units
+
+    trades.push({
+      time: entryCandle.time, exitTime, bias: 'bullish',
+      entryPrice:  parseFloat(entryPrice.toFixed(4)),
+      stopPrice:   parseFloat(slPrice.toFixed(4)),
+      targetPrice: parseFloat(tpPrice.toFixed(4)),
+      exitPrice:   parseFloat(exitPrice.toFixed(4)),
+      outcome, pnlDollars: parseFloat(actualPnl.toFixed(2)),
+      contracts: units,
+      rr: parseFloat((tpDist / slDist).toFixed(2)),
+      signal: 'Momentum-Pullback-Long',
+    })
+
+    lastTradeTime = entryCandle.time
+  }
+
+  return trades
+}
+
 // ── Combined backtest (long version): merge long strategies, light dedup ──────
 function runBacktestLong(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
 
-  // Run custom long strategies + FVG retrace
+  // Run all long strategies
   const sweepTrades = runBacktestSweepBOSLong(candles5m, candles1m || [], symbol, multiplier)
   const fvgRetraceTrades = runBacktestFVGRetraceLong(candles5m, candles1m || [], symbol, multiplier)
+  const momentumTrades = runBacktestMomentumLong(candles5m, candles1m || [], symbol, multiplier)
 
   // Sort by entry time
-  const all = [...sweepTrades, ...fvgRetraceTrades].sort((a, b) => a.time - b.time)
+  const all = [...sweepTrades, ...fvgRetraceTrades, ...momentumTrades].sort((a, b) => a.time - b.time)
 
   // Light dedup: only skip exact same timestamp or within 2 min
   const final = []
@@ -1653,10 +1768,11 @@ export default async function handler(req, res) {
     if (sideParam === 'long') {
       // Long backtest
       if (symbol === 'MGC1!') {
-        // MGC Long: custom strategy + FVG retrace
+        // MGC Long: custom strategy + FVG retrace + momentum
         const mgcTrades = runBacktestMGCLong(candles5m)
         const fvgTrades = runBacktestFVGRetraceLong(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
-        const allMGC = [...mgcTrades, ...fvgTrades].sort((a, b) => a.time - b.time)
+        const momTrades = runBacktestMomentumLong(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
+        const allMGC = [...mgcTrades, ...fvgTrades, ...momTrades].sort((a, b) => a.time - b.time)
         // Dedup
         trades = []
         const usedTimesL = new Set()
