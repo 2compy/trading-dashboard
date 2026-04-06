@@ -312,47 +312,20 @@ function isMGCLongKillZone(ts) {
 //   Trailing: SL trails at 30% above the low watermark profit (keep 70%)
 //   Time exit after 300 candles at current price
 function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300) {
-  let currentSL = slPrice
-  const tpDist = entryPrice - tpPrice  // positive distance downward
+  const tpDist = entryPrice - tpPrice
   if (tpDist <= 0) return null
-  const beThreshold = entryPrice - tpDist * 0.25
-  let beMoved = false
-  let tpReached = false
-  let lowestLow = entryPrice
 
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
 
-    if (fc.low < lowestLow) lowestLow = fc.low
-
-    // Breakeven: after 25% toward TP, lock in entry - 1pt
-    if (!beMoved && fc.low <= beThreshold) {
-      currentSL = entryPrice - 1
-      beMoved = true
-    }
-
-    // TP reached: don't exit, switch to trailing
-    if (!tpReached && fc.low <= tpPrice) {
-      tpReached = true
-      const lockSL = entryPrice - tpDist * 0.6
-      if (lockSL < currentSL) currentSL = lockSL
-    }
-
-    // Trailing stop
-    if (tpReached) {
-      const profit = entryPrice - lowestLow
-      const trailSL = entryPrice - profit * 0.7
-      if (trailSL < currentSL) currentSL = trailSL
-    } else if (beMoved) {
-      const profit = entryPrice - lowestLow
-      const trailSL = entryPrice - profit * 0.4
-      if (trailSL < currentSL) currentSL = trailSL
-    }
-
     // SL hit (price goes UP to hit short SL)
-    if (fc.high >= currentSL) {
-      const outcome = currentSL < entryPrice ? 'win' : 'loss'
-      return { outcome, exitPrice: currentSL, exitTime: fc.time }
+    if (fc.high >= slPrice) {
+      return { outcome: 'loss', exitPrice: slPrice, exitTime: fc.time }
+    }
+
+    // TP hit (price goes DOWN to hit short TP)
+    if (fc.low <= tpPrice) {
+      return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time }
     }
   }
 
@@ -365,59 +338,22 @@ function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles
   return null
 }
 
-// ── Smart LONG simulation — $300 max loss, let winners run to $2000+ ─────────
-// Phases:
-//   Phase 1 (0-25% of TP): raw SL, if hit = loss ($300 max)
-//   Phase 2 (25-100% of TP): SL moved to entry+1 (breakeven)
-//   Phase 3 (TP hit): DON'T exit — switch to trailing mode to ride the move
-//   Trailing: SL trails at 30% of total profit below the high watermark
-//   Time exit after 300 candles at current price
+// ── LONG simulation — exit at TP or SL ──────────────────────────────────────
 function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300) {
-  let currentSL = slPrice
   const tpDist = tpPrice - entryPrice
   if (tpDist <= 0) return null
-  const beThreshold = entryPrice + tpDist * 0.25
-  let beMoved = false
-  let tpReached = false
-  let highestHigh = entryPrice
 
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
 
-    // Track highest high
-    if (fc.high > highestHigh) highestHigh = fc.high
-
-    // Breakeven: after 25% toward TP, lock in entry + 1pt
-    if (!beMoved && fc.high >= beThreshold) {
-      currentSL = entryPrice + 1
-      beMoved = true
+    // SL hit (price goes DOWN to hit long SL)
+    if (fc.low <= slPrice) {
+      return { outcome: 'loss', exitPrice: slPrice, exitTime: fc.time }
     }
 
-    // TP reached: don't exit, switch to trailing to let winners run
-    if (!tpReached && fc.high >= tpPrice) {
-      tpReached = true
-      // Lock in at least 60% of the TP move
-      const lockSL = entryPrice + tpDist * 0.6
-      if (lockSL > currentSL) currentSL = lockSL
-    }
-
-    // Trailing stop: once TP is reached, trail aggressively to capture big moves
-    if (tpReached) {
-      const profit = highestHigh - entryPrice
-      // Trail SL at 30% below the high watermark profit
-      const trailSL = entryPrice + profit * 0.7
-      if (trailSL > currentSL) currentSL = trailSL
-    } else if (beMoved) {
-      // Before TP: gentle trail after breakeven
-      const profit = highestHigh - entryPrice
-      const trailSL = entryPrice + profit * 0.4
-      if (trailSL > currentSL) currentSL = trailSL
-    }
-
-    // SL hit
-    if (fc.low <= currentSL) {
-      const outcome = currentSL > entryPrice ? 'win' : 'loss'
-      return { outcome, exitPrice: currentSL, exitTime: fc.time }
+    // TP hit (price goes UP to hit long TP)
+    if (fc.high >= tpPrice) {
+      return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time }
     }
   }
 
@@ -621,7 +557,7 @@ function runBacktestMGC(candles5m) {
 
     usedFVGs.add(fvg5m.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = now5m.time
+    lastTradeTime = exitTime || now5m.time
   }
 
   return trades
@@ -956,7 +892,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
 
     usedSweeps.add(sweepTime)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = now5m.time
+    lastTradeTime = exitTime || now5m.time
   }
 
   return trades
@@ -1395,7 +1331,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
 
     usedIFVGs.add(ifvg.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = entryCandle.time
+    lastTradeTime = exitTime || entryCandle.time
   }
 
   return trades
