@@ -305,6 +305,8 @@ function isMGCLongKillZone(ts) {
          (mins >= 420 && mins < 780)   // NY:   7:00 AM – 1:00 PM ET
 }
 
+const MAX_TRADE_DURATION = 86400  // 1 day in seconds
+
 // ── Smart SHORT simulation — let winners run past TP ──────────────────────────
 // Phases:
 //   Phase 1 (0-25% of TP): raw SL, if hit = loss
@@ -312,12 +314,18 @@ function isMGCLongKillZone(ts) {
 //   Phase 3 (TP hit): DON'T exit — switch to trailing mode to ride the move down
 //   Trailing: SL trails at 30% above the low watermark profit (keep 70%)
 //   Time exit after 300 candles at current price
-function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300) {
+function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300, entryTime = 0) {
   const tpDist = entryPrice - tpPrice
   if (tpDist <= 0) return null
 
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
+
+    // Max 1-day duration — force close
+    if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
+      const outcome = fc.close < entryPrice ? 'win' : 'loss'
+      return { outcome, exitPrice: fc.close, exitTime: fc.time }
+    }
 
     // SL hit (price goes UP to hit short SL)
     if (fc.high >= slPrice) {
@@ -339,13 +347,19 @@ function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles
   return null
 }
 
-// ── LONG simulation — exit at TP or SL ──────────────────────────────────────
-function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300) {
+// ── LONG simulation — exit at TP, SL, or max 1-day duration ─────────────────
+function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300, entryTime = 0) {
   const tpDist = tpPrice - entryPrice
   if (tpDist <= 0) return null
 
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
+
+    // Max 1-day duration — force close
+    if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
+      const outcome = fc.close > entryPrice ? 'win' : 'loss'
+      return { outcome, exitPrice: fc.close, exitTime: fc.time }
+    }
 
     // SL hit (price goes DOWN to hit long SL)
     if (fc.low <= slPrice) {
@@ -358,7 +372,7 @@ function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles 
     }
   }
 
-  // Time exit
+  // Time exit — force close at last candle
   if (simCandles.length > 0) {
     const lastCandle = simCandles[Math.min(simCandles.length - 1, maxCandles - 1)]
     const outcome = lastCandle.close > entryPrice ? 'win' : 'loss'
@@ -437,7 +451,7 @@ function runBacktestMGC(candles5m) {
 
   const candles1h  = buildHTFCandles(candles5m, 60)
   const candles4h  = buildHTFCandles(candles5m, 240)
-  let lastTradeTime = 0
+  let lastExitTime = 0
   const usedFVGs       = new Set()  // one trade per FVG
   const usedEntryTimes = new Set()  // no duplicate timestamps
 
@@ -446,7 +460,7 @@ function runBacktestMGC(candles5m) {
     const recent5m = candles5m.slice(Math.max(0, i - 36), i + 1)  // ~3hrs of 5m
 
     if (!isMGCKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 300) continue
+    if (now5m.time <= lastExitTime) continue
 
     // ── 4h trend direction (required — only trade with the 4h trend) ──────────
     const now4hIdx = candles4h.findLastIndex(c => c.time <= now5m.time)
@@ -532,9 +546,9 @@ function runBacktestMGC(candles5m) {
 
     let simResult = null
     if (bias === 'bearish') {
-      simResult = simulateShortTrade(future5m, entryPrice, slPrice, tpPrice)
+      simResult = simulateShortTrade(future5m, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
     } else {
-      simResult = simulateLongTrade(future5m, entryPrice, slPrice, tpPrice)
+      simResult = simulateLongTrade(future5m, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
     }
     if (!simResult) continue
 
@@ -557,7 +571,7 @@ function runBacktestMGC(candles5m) {
 
     usedFVGs.add(fvg5m.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = now5m.time
+    lastExitTime = exitTime || now5m.time
   }
 
   return trades
@@ -570,7 +584,7 @@ function runBacktestMGCLong(candles5m) {
   if (!candles5m.length) return trades
 
   const candles4h  = buildHTFCandles(candles5m, 240)
-  let lastTradeTime = 0
+  let lastExitTime = 0
   const usedSweeps     = new Set()
   const usedEntryTimes = new Set()
 
@@ -579,7 +593,7 @@ function runBacktestMGCLong(candles5m) {
     const recent5m = candles5m.slice(Math.max(0, i - 100), i + 1)  // ~8.3hrs of 5m
 
     if (!isMGCLongKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 120) continue
+    if (now5m.time <= lastExitTime) continue
 
     // ── 1. Soft bullish bias: recent 5m close > 20-candle SMA OR any 4H bullish BOS
     const smaSlice = recent5m.slice(-20)
@@ -680,7 +694,7 @@ function runBacktestMGCLong(candles5m) {
     const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
     const future5m = candles5m.slice(entryIdx + 1, entryIdx + 120)
 
-    const simResult = simulateLongTrade(future5m, entryPrice, slPrice, tpPrice, 120)
+    const simResult = simulateLongTrade(future5m, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     if (!simResult) continue
 
     const { outcome, exitPrice, exitTime } = simResult
@@ -700,7 +714,7 @@ function runBacktestMGCLong(candles5m) {
 
     usedSweeps.add(sweepCandle.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = exitTime || now5m.time
+    lastExitTime = exitTime || now5m.time
   }
 
   return trades
@@ -762,7 +776,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
 
   const dailyHL = buildDailyHL(candles5m)
   const sessionIndex = buildSessionHLIndex(candles5m)
-  let lastTradeTime = 0
+  let lastExitTime = 0
   const usedSweeps     = new Set()
   const usedEntryTimes = new Set()
 
@@ -771,7 +785,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     const recent5m = candles5m.slice(Math.max(0, i - 30), i + 1)
 
     if (!isKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 300) continue
+    if (now5m.time <= lastExitTime) continue
 
     const pdhl = getPrevDayHL(dailyHL, now5m.time)
 
@@ -864,9 +878,9 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
 
     let simResult = null
     if (bias === 'bearish') {
-      simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice)
+      simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
     } else {
-      simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+      simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
     }
     if (!simResult) continue
 
@@ -891,7 +905,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
 
     usedSweeps.add(sweepTime)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = now5m.time
+    lastExitTime = exitTime || now5m.time
   }
 
   return trades
@@ -905,7 +919,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
   const candles4h = buildHTFCandles(candles5m, 240)
   const dailyHL = buildDailyHL(candles5m)
   const sessionIndex = buildSessionHLIndex(candles5m)
-  let lastTradeTime = 0
+  let lastExitTime = 0
   const usedSweeps     = new Set()
   const usedEntryTimes = new Set()
 
@@ -920,7 +934,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
     if (symbol === 'MNQ1!') {
       // Kill zone: 7:30 AM - 1:00 PM for sweep detection + entries
       if (!(nowMins >= 450 && nowMins < 780)) continue
-      if (now5m.time - lastTradeTime < 120) continue
+      if (now5m.time <= lastExitTime) continue
 
       // 1. Soft bullish bias: recent 5m close > 20-candle SMA OR any 4H bullish BOS
       const smaSlice = recent5m.slice(-20)
@@ -1020,7 +1034,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       const entryIdx5m = candles5m.findIndex(c => c.time >= entryCandle.time)
       const simCandles = future1m.length > 0 ? future1m : candles5m.slice(entryIdx5m + 1, entryIdx5m + 200)
 
-      const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+      const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
       if (!simResult) continue
 
       const { outcome, exitPrice, exitTime } = simResult
@@ -1043,7 +1057,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
 
       usedSweeps.add(sweepCandle.time)
       usedEntryTimes.add(entryCandle.time)
-      lastTradeTime = exitTime || now5m.time
+      lastExitTime = exitTime || now5m.time
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1052,7 +1066,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
     else if (symbol === 'MES1!') {
       // Kill zone: 7:30 AM - 1:00 PM (450-780 mins)
       if (!(nowMins >= 450 && nowMins < 780)) continue
-      if (now5m.time - lastTradeTime < 120) continue
+      if (now5m.time <= lastExitTime) continue
 
       // 1. Bias check: 1H uptrend OR prev day closed bullish
       const now1hIdx = buildHTFCandles(candles5m, 60).findLastIndex(c => c.time <= now5m.time)
@@ -1193,7 +1207,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       const entryIdx5m = candles5m.findIndex(c => c.time >= entryCandle.time)
       const simCandles = future1m.length > 0 ? future1m : candles5m.slice(entryIdx5m + 1, entryIdx5m + 200)
 
-      const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+      const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
       if (!simResult) continue
 
       const { outcome, exitPrice, exitTime } = simResult
@@ -1216,7 +1230,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
 
       usedSweeps.add(sweepCandle.time)
       usedEntryTimes.add(entryCandle.time)
-      lastTradeTime = exitTime || now5m.time
+      lastExitTime = exitTime || now5m.time
     }
   }
 
@@ -1234,7 +1248,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
   const allFVGs  = detectFVGs(candles5m)
   const allIFVGs = detectIFVGs(candles5m, allFVGs, fvgWidth)
 
-  let lastTradeTime    = 0
+  let lastExitTime    = 0
   const usedIFVGs      = new Set()
   const usedEntryTimes = new Set()
 
@@ -1250,7 +1264,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     if (!killZoneFn(entryCandle.time)) continue
 
     // Cooldown: 20 min between trades
-    if (entryCandle.time - lastTradeTime < 300) continue
+    if (entryCandle.time <= lastExitTime) continue
 
     // Dedup
     if (usedIFVGs.has(ifvg.time)) continue
@@ -1304,9 +1318,9 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
 
     let simResult = null
     if (bias === 'bearish') {
-      simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice)
+      simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
     } else {
-      simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+      simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
     }
     if (!simResult) continue
 
@@ -1329,7 +1343,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
 
     usedIFVGs.add(ifvg.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = entryCandle.time
+    lastExitTime = exitTime || entryCandle.time
   }
 
   return trades
@@ -1346,7 +1360,7 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
   const allFVGs  = detectFVGs(candles5m)
   const allIFVGs = detectIFVGs(candles5m, allFVGs, fvgWidth)
 
-  let lastTradeTime    = 0
+  let lastExitTime    = 0
   const usedIFVGs      = new Set()
   const usedEntryTimes = new Set()
 
@@ -1362,7 +1376,7 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
     if (!killZoneFn(entryCandle.time)) continue
 
     // Cooldown: 20 min between trades
-    if (entryCandle.time - lastTradeTime < 300) continue
+    if (entryCandle.time <= lastExitTime) continue
 
     // Dedup
     if (usedIFVGs.has(ifvg.time)) continue
@@ -1409,7 +1423,7 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
       ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
       : candles5m.slice(entryIdx + 1, entryIdx + 200)
 
-    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
     if (!simResult) continue
 
     const { outcome, exitPrice, exitTime } = simResult
@@ -1429,7 +1443,7 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
 
     usedIFVGs.add(ifvg.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = exitTime || entryCandle.time
+    lastExitTime = exitTime || entryCandle.time
   }
 
   return trades
@@ -1448,30 +1462,20 @@ function runBacktest(candles5m, candles1m, symbol) {
     .filter(t => t.bias === 'bearish')
     .sort((a, b) => a.time - b.time)
 
-  // Aggressive dedup:
-  //  1. Exact same entry timestamp = duplicate (drop the second)
-  //  2. Same bias within 20 min = same market move (drop the second)
-  //  3. Any trade within 10 min of another = too close (drop the second)
+  // No-overlap dedup: can't enter a new trade while the previous one is still active
   const final = []
   const usedTimes = new Set()
+  let lastExitTime = 0
   for (const t of all) {
     // Exact time dedup
     if (usedTimes.has(t.time)) continue
-
-    // Check against all accepted trades for proximity + same-bias overlap
-    let dominated = false
-    for (const prev of final) {
-      const gap = t.time - prev.time
-      // Within 10 min of any trade = too close
-      if (gap < 180) { dominated = true; break }
-      // Same bias within 20 min = same move, skip
-      if (gap < 600 && t.bias === prev.bias) { dominated = true; break }
-    }
-    if (dominated) continue
+    // No overlap — entry must be after previous trade's exit
+    if (t.time <= lastExitTime) continue
 
     t.id = final.length + 1
     final.push(t)
     usedTimes.add(t.time)
+    if (t.exitTime) lastExitTime = t.exitTime
   }
 
   return final
@@ -1498,7 +1502,7 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
   if (!candles5m.length) return trades
 
   const units = UNITS[symbol] || 1
-  let lastTradeTime = 0
+  let lastExitTime = 0
   const usedFVGs = new Set()
 
   // Pre-detect ALL bullish FVGs ≥ 4pt wide
@@ -1575,7 +1579,7 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
       }
     }
     if (!entryCandle) continue
-    if (entryCandle.time - lastTradeTime < 60) continue
+    if (entryCandle.time <= lastExitTime) continue
 
     // ── ENTRY ────────────────────────────────────────────────────────────────
     const entryPrice = entryCandle.close
@@ -1617,7 +1621,7 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     const ei5m = candles5m.findIndex(c => c.time >= entryCandle.time)
     const simCandles = fut1m.length > 0 ? fut1m : candles5m.slice(ei5m + 1, ei5m + 250)
 
-    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
     if (!simResult) continue
 
     const { outcome, exitPrice, exitTime } = simResult
@@ -1636,7 +1640,7 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     })
 
     usedFVGs.add(fvg.time)
-    lastTradeTime = exitTime || entryCandle.time
+    lastExitTime = exitTime || entryCandle.time
   }
 
   return trades
@@ -1654,13 +1658,13 @@ function runBacktestMomentumLong(candles5m, candles1m, symbol, multiplier) {
   if (!candles5m.length) return trades
 
   const units = UNITS[symbol] || 1
-  let lastTradeTime = 0
+  let lastExitTime = 0
 
   for (let i = 20; i < candles5m.length - 2; i++) {
     const now = candles5m[i]
     const mins = getETMinutes(now.time)
     if (!(mins >= 420 && mins < 900)) continue
-    if (now.time - lastTradeTime < 60) continue
+    if (now.time <= lastExitTime) continue
 
     // 1. Find bullish momentum: 3+ of last 5 candles are bullish with higher highs
     const window5 = candles5m.slice(i - 4, i + 1)
@@ -1712,7 +1716,7 @@ function runBacktestMomentumLong(candles5m, candles1m, symbol, multiplier) {
     const fut1m = candles1m.slice(ei1m + 1, ei1m + 500)
     const simCandles = fut1m.length > 0 ? fut1m : candles5m.slice(ei5m + 1, ei5m + 250)
 
-    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
     if (!simResult) continue
 
     const { outcome, exitPrice, exitTime } = simResult
@@ -1730,7 +1734,7 @@ function runBacktestMomentumLong(candles5m, candles1m, symbol, multiplier) {
       signal: 'Momentum-Pullback-Long',
     })
 
-    lastTradeTime = exitTime || entryCandle.time
+    lastExitTime = exitTime || entryCandle.time
   }
 
   return trades
@@ -1795,7 +1799,7 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
   if (!candles5m.length) return trades
 
   const units = UNITS[symbol] || 1
-  let lastTradeTime = 0
+  let lastExitTime = 0
   const usedFVGs = new Set()
   const usedEntryTimes = new Set()
   const slBounds = LONG_SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
@@ -1808,7 +1812,7 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
     const entryCandle = findFVGTapBackBT(candles5m, fvg)
     if (!entryCandle) continue
     if (!isKillZone(entryCandle.time)) continue
-    if (entryCandle.time - lastTradeTime < 300) continue
+    if (entryCandle.time <= lastExitTime) continue
     if (usedFVGs.has(fvg.time)) continue
     if (usedEntryTimes.has(entryCandle.time)) continue
 
@@ -1849,7 +1853,7 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
     const ei5m = candles5m.findIndex(c => c.time >= entryCandle.time)
     const simCandles = fut1m.length > 0 ? fut1m : candles5m.slice(ei5m + 1, ei5m + 250)
 
-    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice)
+    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
     if (!simResult) continue
 
     const { outcome, exitPrice, exitTime } = simResult
@@ -1869,7 +1873,7 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
 
     usedFVGs.add(fvg.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = exitTime || entryCandle.time
+    lastExitTime = exitTime || entryCandle.time
   }
 
   return trades
@@ -1962,18 +1966,14 @@ export default async function handler(req, res) {
           .sort((a, b) => a.time - b.time)
         trades = []
         const usedTimes = new Set()
+        let mgcShortLastExit = 0
         for (const t of all) {
           if (usedTimes.has(t.time)) continue
-          let dominated = false
-          for (const prev of trades) {
-            const gap = t.time - prev.time
-            if (gap < 180) { dominated = true; break }
-            if (gap < 600 && t.bias === prev.bias) { dominated = true; break }
-          }
-          if (dominated) continue
+          if (t.time <= mgcShortLastExit) continue
           t.id = trades.length + 1
           trades.push(t)
           usedTimes.add(t.time)
+          if (t.exitTime) mgcShortLastExit = t.exitTime
         }
       } else {
         trades = runBacktest(candles5m, candles1m, symbol)
