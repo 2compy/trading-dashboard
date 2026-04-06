@@ -330,9 +330,9 @@ function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles 
 
     // Check SL (uses potentially moved-up breakeven/trailing stop)
     if (fc.low <= currentSL) {
-      const exitPrice = Math.max(currentSL, entryPrice)  // never exit below entry if BE was hit
-      const outcome = exitPrice >= entryPrice ? 'win' : 'loss'
-      return { outcome, exitPrice: beMoved ? Math.max(currentSL, entryPrice + 0.5) : currentSL, exitTime: fc.time }
+      const exitPrice = currentSL
+      const outcome = exitPrice > entryPrice ? 'win' : 'loss'
+      return { outcome, exitPrice, exitTime: fc.time }
     }
   }
 
@@ -340,7 +340,7 @@ function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles 
   if (simCandles.length > 0) {
     const lastIdx = Math.min(simCandles.length - 1, maxCandles - 1)
     const lastCandle = simCandles[lastIdx]
-    const outcome = lastCandle.close >= entryPrice ? 'win' : 'loss'
+    const outcome = lastCandle.close > entryPrice ? 'win' : 'loss'
     return { outcome, exitPrice: lastCandle.close, exitTime: lastCandle.time }
   }
 
