@@ -292,7 +292,7 @@ function isMGCLongKillZone(ts) {
 // 1. Check TP BEFORE SL on same candle (bullish bias)
 // 2. After price moves 50% toward TP, move SL to entry (breakeven)
 // 3. If neither hit after 120 candles (~2hrs on 1m, ~10hrs on 5m), exit at close
-function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 120) {
+function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 200) {
   let currentSL = slPrice
   const tpDist = tpPrice - entryPrice
   const beThreshold = entryPrice + tpDist * 0.5  // move to BE after 50% of TP reached
@@ -1476,9 +1476,10 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     const smaAvg = preFVG.reduce((s, c) => s + c.close, 0) / preFVG.length
     if (candles5m[fvgStartIdx].close < smaAvg) continue
 
-    // 2. Scan forward for retrace into FVG zone
+    // 2. Scan forward for retrace INTO the FVG zone (must actually enter FVG)
     const postFVG = candles5m.slice(fvgStartIdx + 1, fvgStartIdx + 200)
     let movedAbove = false
+    let highAfterFVG = 0
     let entryCandle = null
 
     for (let k = 0; k < postFVG.length; k++) {
@@ -1486,20 +1487,23 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
       // FVG invalidated: candle closes below FVG bottom
       if (c.close < fvg.bottom) break
 
-      // Price moved above the FVG top
-      if (c.high > fvg.top) movedAbove = true
+      // Track highest point after FVG (this becomes our TP target)
+      if (c.high > highAfterFVG) highAfterFVG = c.high
 
-      // Retrace: price wicks into or near FVG zone (within 2pt above top is close enough)
-      if (movedAbove && c.low <= fvg.top + 2 && c.low >= fvg.bottom - 1) {
-        // This candle IS the entry if it closes bullish (no need to wait for next candle)
-        if (c.close > c.open) {
+      // Price must close above FVG top at least once = moved away
+      if (c.close > fvg.top) movedAbove = true
+
+      // Retrace: wick must actually enter the FVG zone (low <= fvg.top AND low >= fvg.bottom)
+      if (movedAbove && c.low <= fvg.top && c.low >= fvg.bottom) {
+        // Entry if this candle closes bullish AND closes above FVG mid (held the zone)
+        if (c.close > c.open && c.close >= fvg.mid) {
           entryCandle = c
           break
         }
-        // Or check the next candle for confirmation
+        // Or next candle confirms with bullish close above FVG mid
         if (k + 1 < postFVG.length) {
           const next = postFVG[k + 1]
-          if (next.close > next.open) {
+          if (next.close > next.open && next.close >= fvg.mid && next.close > fvg.bottom) {
             entryCandle = next
             break
           }
@@ -1509,32 +1513,32 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     if (!entryCandle) continue
     if (entryCandle.time - lastTradeTime < 120) continue
 
-    // 3. Entry at the candle's close
-    const entryPrice = entryCandle.close
+    // 3. Entry at the FVG top (limit order style — better price than candle close)
+    const entryPrice = Math.min(entryCandle.close, fvg.top)
 
-    // 4. SL below the FVG bottom with buffer
+    // 4. SL below the FVG bottom with proper buffer
     const fvgWidth = fvg.top - fvg.bottom
-    const slBuffer = Math.max(2, fvgWidth * 0.3)
+    const slBuffer = Math.max(3, fvgWidth * 0.5)
     const slPrice = fvg.bottom - slBuffer
 
-    // 5. TP at previous highs — scan wider window for targets
+    // 5. TP at the high made after FVG (structural target price already reached before)
     const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
     const lookback = candles5m.slice(Math.max(0, entryIdx - 60), entryIdx + 1)
     const { highs: h5m } = detectSwings(lookback, 2)
     const tpCands = h5m.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)
 
-    // Also use the high of the move that created the FVG
-    const moveHigh = Math.max(...candles5m.slice(fvgStartIdx, Math.min(fvgStartIdx + 10, candles5m.length)).map(c => c.high))
-    const recentHigh = Math.max(...lookback.slice(-30).map(c => c.high))
-
+    // Use the high of the move after FVG as primary target (price already went there)
     let tpPrice = null
-    if (tpCands.length) {
-      tpPrice = tpCands[0].price
+    if (highAfterFVG > entryPrice + 2) {
+      tpPrice = highAfterFVG
     }
-    // Use move high or recent high as fallback/alternative
-    const altTP = Math.max(moveHigh, recentHigh)
-    if (!tpPrice && altTP > entryPrice) tpPrice = altTP
-    if (tpPrice && altTP > entryPrice && altTP < tpPrice) tpPrice = altTP  // prefer closer target
+    // Or nearest swing high
+    if (tpCands.length) {
+      const swingTP = tpCands[0].price
+      if (!tpPrice || (swingTP > entryPrice && swingTP < tpPrice)) {
+        tpPrice = swingTP
+      }
+    }
 
     if (!tpPrice || tpPrice <= entryPrice) continue
 
@@ -1542,15 +1546,10 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (slDist === 0 || tpDist <= 0) continue
 
-    // If R:R too low, try to extend TP to meet minimum 3:1
+    // Only take trades where natural TP meets 3:1 — do NOT extend TP artificially
     const minRR = LONG_SYMBOL_RR[symbol] || 3.0
-    if (tpDist / slDist < minRR) {
-      // Extend TP to hit minimum R:R
-      tpPrice = entryPrice + slDist * minRR
-    }
-    // Recalc after potential extension
-    const finalTPDist = Math.abs(tpPrice - entryPrice)
-    if (finalTPDist / slDist > 16) continue
+    if (tpDist / slDist < minRR) continue
+    if (tpDist / slDist > 16) continue
 
     // 6. Simulate trade
     const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
