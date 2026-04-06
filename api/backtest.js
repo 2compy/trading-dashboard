@@ -97,10 +97,11 @@ function getETMinutes(ts) {
   return v
 }
 
-// Kill zones: London (3-5am ET), NY open (8:30am-12pm ET), NY PM (1:30-3pm ET)
+// Kill zones: Asia (8pm-midnight ET), London (3-5am ET), NY open (8:30am-12pm ET), NY PM (1:30-3pm ET)
 function isKillZone(ts) {
   const mins = getETMinutes(ts)
-  return (mins >= 180 && mins < 300) ||   // London: 3:00–5:00 AM ET
+  return (mins >= 1200) ||                // Asia: 8:00 PM – midnight ET
+         (mins >= 180 && mins < 300) ||   // London: 3:00–5:00 AM ET
          (mins >= 510 && mins < 720) ||   // NY open: 8:30 AM–12:00 PM ET
          (mins >= 810 && mins < 900)      // NY PM: 1:30–3:00 PM ET
 }
@@ -254,11 +255,11 @@ const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 // ── Min FVG width for IFVG detection, per symbol ────────────────────────────
 // MGC ~3100 → 3pt, MES ~5500 → 7pt, MNQ ~19000 → 20pt, Silver ~32 → 0.10
 const MIN_FVG_WIDTH = {
-  'MES1!': 7,
-  'MNQ1!': 20,
-  'MGC1!': 3,
+  'MES1!': 5,
+  'MNQ1!': 16,
+  'MGC1!': 4,
 }
-const DEFAULT_FVG_WIDTH = 7
+const DEFAULT_FVG_WIDTH = 5
 // ── SL distance bounds per symbol ───────────────────────────────────────────
 const SL_BOUNDS = {
   'MES1!': { min: 3, max: 60 },
@@ -445,7 +446,7 @@ function runBacktestMGC(candles5m) {
     const recent5m = candles5m.slice(Math.max(0, i - 36), i + 1)  // ~3hrs of 5m
 
     if (!isMGCKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 600) continue
+    if (now5m.time - lastTradeTime < 300) continue
 
     // ── 4h trend direction (required — only trade with the 4h trend) ──────────
     const now4hIdx = candles4h.findLastIndex(c => c.time <= now5m.time)
@@ -770,7 +771,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     const recent5m = candles5m.slice(Math.max(0, i - 30), i + 1)
 
     if (!isKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 600) continue
+    if (now5m.time - lastTradeTime < 300) continue
 
     const pdhl = getPrevDayHL(dailyHL, now5m.time)
 
@@ -1249,7 +1250,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     if (!killZoneFn(entryCandle.time)) continue
 
     // Cooldown: 20 min between trades
-    if (entryCandle.time - lastTradeTime < 600) continue
+    if (entryCandle.time - lastTradeTime < 300) continue
 
     // Dedup
     if (usedIFVGs.has(ifvg.time)) continue
@@ -1361,7 +1362,7 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
     if (!killZoneFn(entryCandle.time)) continue
 
     // Cooldown: 20 min between trades
-    if (entryCandle.time - lastTradeTime < 600) continue
+    if (entryCandle.time - lastTradeTime < 300) continue
 
     // Dedup
     if (usedIFVGs.has(ifvg.time)) continue
@@ -1462,9 +1463,9 @@ function runBacktest(candles5m, candles1m, symbol) {
     for (const prev of final) {
       const gap = t.time - prev.time
       // Within 10 min of any trade = too close
-      if (gap < 600) { dominated = true; break }
+      if (gap < 180) { dominated = true; break }
       // Same bias within 20 min = same move, skip
-      if (gap < 1200 && t.bias === prev.bias) { dominated = true; break }
+      if (gap < 600 && t.bias === prev.bias) { dominated = true; break }
     }
     if (dominated) continue
 
@@ -1807,7 +1808,7 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
     const entryCandle = findFVGTapBackBT(candles5m, fvg)
     if (!entryCandle) continue
     if (!isKillZone(entryCandle.time)) continue
-    if (entryCandle.time - lastTradeTime < 600) continue
+    if (entryCandle.time - lastTradeTime < 300) continue
     if (usedFVGs.has(fvg.time)) continue
     if (usedEntryTimes.has(entryCandle.time)) continue
 
@@ -1966,8 +1967,8 @@ export default async function handler(req, res) {
           let dominated = false
           for (const prev of trades) {
             const gap = t.time - prev.time
-            if (gap < 600) { dominated = true; break }
-            if (gap < 1200 && t.bias === prev.bias) { dominated = true; break }
+            if (gap < 180) { dominated = true; break }
+            if (gap < 600 && t.bias === prev.bias) { dominated = true; break }
           }
           if (dominated) continue
           t.id = trades.length + 1
