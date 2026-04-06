@@ -270,7 +270,7 @@ const DEFAULT_SL_BOUNDS = { min: 3, max: 60 }
 // ── LONG-specific overrides ──────────────────────────────────────────────────
 // Much tighter TP (1.2:1 RR) so longs actually reach target
 const LONG_MAX_LOSS = 300  // max $300 loss per trade
-const LONG_SYMBOL_RR = { 'MES1!': 1.0, 'MNQ1!': 1.0, 'MGC1!': 1.0 }
+const LONG_SYMBOL_RR = { 'MES1!': 3.0, 'MNQ1!': 3.0, 'MGC1!': 3.0 }
 // Fixed SL in points = $300 / (multiplier × contracts)
 const LONG_FIXED_SL  = { 'MES1!': 30, 'MNQ1!': 75, 'MGC1!': 15 }
 const LONG_SL_BOUNDS = {
@@ -1599,7 +1599,8 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     if (tpDist / slDist > 16) continue
 
     // If TP is very close (< 1:1), bump it to at least 1:1
-    if (tpDist < slDist) tpPrice = entryPrice + slDist
+    const fvgMinRR = LONG_SYMBOL_RR[symbol] || 3.0
+    if (tpDist / slDist < fvgMinRR) tpPrice = entryPrice + slDist * fvgMinRR
 
     const finalTPDist = Math.abs(tpPrice - entryPrice)
 
@@ -1694,7 +1695,9 @@ function runBacktestMomentumLong(candles5m, candles1m, symbol, multiplier) {
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (slDist <= 0 || tpDist <= 0) continue
     if (tpDist / slDist > 16) continue
-    if (tpDist < slDist * 0.5) continue  // skip if TP is less than half the risk
+    const momMinRR = LONG_SYMBOL_RR[symbol] || 3.0
+    if (tpDist / slDist < momMinRR) tpPrice = entryPrice + slDist * momMinRR
+    if (tpPrice <= entryPrice) continue
 
     // Simulate
     const ei5m = candles5m.findIndex(c => c.time >= entryCandle.time)
