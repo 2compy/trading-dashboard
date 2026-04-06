@@ -269,18 +269,27 @@ const DEFAULT_SL_BOUNDS = { min: 3, max: 60 }
 
 // ── LONG-specific overrides ──────────────────────────────────────────────────
 // Much tighter TP (1.2:1 RR) so longs actually reach target
+const LONG_MAX_LOSS = 300  // max $300 loss per trade
 const LONG_SYMBOL_RR = { 'MES1!': 1.0, 'MNQ1!': 1.0, 'MGC1!': 1.0 }
-const LONG_FIXED_SL  = { 'MES1!': null, 'MNQ1!': 40, 'MGC1!': 20 }
+// Fixed SL in points = $300 / (multiplier × contracts)
+const LONG_FIXED_SL  = { 'MES1!': 30, 'MNQ1!': 75, 'MGC1!': 15 }
 const LONG_SL_BOUNDS = {
-  'MES1!': { min: 8, max: 50 },
-  'MNQ1!': { min: 10, max: 80 },
-  'MGC1!': { min: 5, max: 35 },
+  'MES1!': { min: 5, max: 30 },
+  'MNQ1!': { min: 10, max: 75 },
+  'MGC1!': { min: 3, max: 15 },
 }
 // ATR-like volatility measure for dynamic SL sizing
 function getAvgRange(candles, len = 14) {
   const slice = candles.slice(-len)
   if (!slice.length) return 10
   return slice.reduce((s, c) => s + (c.high - c.low), 0) / slice.length
+}
+// Cap SL distance so max loss never exceeds $300
+function capLongSL(entryPrice, rawSLPrice, symbol) {
+  const maxSLDist = LONG_FIXED_SL[symbol] || 30
+  const rawDist = entryPrice - rawSLPrice
+  if (rawDist > maxSLDist) return entryPrice - maxSLDist
+  return rawSLPrice
 }
 // Kill zone for longs: NY session only (8:30am–12pm ET) — highest probability for bullish reversals
 function isLongKillZone(ts) {
@@ -648,8 +657,8 @@ function runBacktestMGCLong(candles5m) {
 
     const entryPrice = fvgEntryPrice
 
-    // ── 6. SL below swept low wick - 3pt buffer ──────────────────────────────
-    const slPrice = sweepWickLow - 3
+    // ── 6. SL below swept low wick - 3pt buffer, capped to $300 max loss ─────
+    const slPrice = capLongSL(entryPrice, sweepWickLow - 3, 'MGC1!')
 
     // ── 7. TP at previous swing high or equal highs above ─────────────────────
     const tpCands = h5m.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)
@@ -988,8 +997,8 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       if (!entryCandle) continue
       if (usedEntryTimes.has(entryCandle.time)) continue
 
-      // 6. SL below sweep wick - 3pt
-      const slPrice = sweepWickLow - 3
+      // 6. SL below sweep wick - 3pt, capped to $300 max loss
+      const slPrice = capLongSL(entryPrice, sweepWickLow - 3, symbol)
 
       // 7. TP at equal highs or prev session high
       const { highs: h5m } = detectSwings(recent5m, 2)
@@ -1156,8 +1165,8 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       if (!entryCandle) continue
       if (usedEntryTimes.has(entryCandle.time)) continue
 
-      // 6. SL below sweep wick - 3pt
-      const slPrice = sweepWickLow - 3
+      // 6. SL below sweep wick - 3pt, capped to $300 max loss
+      const slPrice = capLongSL(entryPrice, sweepWickLow - 3, symbol)
 
       // 7. TP at prev day high
       let tpPrice = null
@@ -1564,9 +1573,9 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     // ── ENTRY ────────────────────────────────────────────────────────────────
     const entryPrice = entryCandle.close
 
-    // ── SL: below FVG with ATR-based buffer (wide = survivable) ─────────────
+    // ── SL: below FVG with ATR-based buffer, capped to $300 max loss ────────
     const slBuffer = Math.max(3, atr * 0.8)
-    const slPrice = fvg.bottom - slBuffer
+    const slPrice = capLongSL(entryPrice, fvg.bottom - slBuffer, symbol)
 
     // ── TP: displacement high (price already went there once) ────────────────
     // This is the key insight — we're targeting a level price ALREADY hit,
@@ -1674,7 +1683,7 @@ function runBacktestMomentumLong(candles5m, candles1m, symbol, multiplier) {
     // 5. SL below the pullback low with ATR buffer
     const atr = getAvgRange(candles5m.slice(Math.max(0, i - 14), i + 1))
     const pullbackLow = Math.min(now.low, candles5m[i - 1].low)
-    const slPrice = pullbackLow - Math.max(2, atr * 0.5)
+    const slPrice = capLongSL(entryPrice, pullbackLow - Math.max(2, atr * 0.5), symbol)
 
     // 6. TP at the momentum high (price already reached this level)
     const momentumHigh = Math.max(...window5.map(c => c.high))
