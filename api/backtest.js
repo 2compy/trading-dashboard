@@ -697,7 +697,7 @@ function runBacktestMGCLong(candles5m) {
 
     usedSweeps.add(sweepCandle.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = now5m.time
+    lastTradeTime = exitTime || now5m.time
   }
 
   return trades
@@ -1043,7 +1043,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
 
       usedSweeps.add(sweepCandle.time)
       usedEntryTimes.add(entryCandle.time)
-      lastTradeTime = now5m.time
+      lastTradeTime = exitTime || now5m.time
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1216,7 +1216,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
 
       usedSweeps.add(sweepCandle.time)
       usedEntryTimes.add(entryCandle.time)
-      lastTradeTime = now5m.time
+      lastTradeTime = exitTime || now5m.time
     }
   }
 
@@ -1333,7 +1333,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
 
     usedIFVGs.add(ifvg.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = entryCandle.time
+    lastTradeTime = exitTime || entryCandle.time
   }
 
   return trades
@@ -1433,7 +1433,7 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
 
     usedIFVGs.add(ifvg.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = entryCandle.time
+    lastTradeTime = exitTime || entryCandle.time
   }
 
   return trades
@@ -1628,7 +1628,7 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     })
 
     usedFVGs.add(fvg.time)
-    lastTradeTime = entryCandle.time
+    lastTradeTime = exitTime || entryCandle.time
   }
 
   return trades
@@ -1720,7 +1720,7 @@ function runBacktestMomentumLong(candles5m, candles1m, symbol, multiplier) {
       signal: 'Momentum-Pullback-Long',
     })
 
-    lastTradeTime = entryCandle.time
+    lastTradeTime = exitTime || entryCandle.time
   }
 
   return trades
@@ -1738,19 +1738,21 @@ function runBacktestLong(candles5m, candles1m, symbol) {
   // Sort by entry time
   const all = [...sweepTrades, ...fvgRetraceTrades, ...momentumTrades].sort((a, b) => a.time - b.time)
 
-  // Light dedup: only skip exact same timestamp or within 2 min
+  // Dedup: no overlapping trades — new trade can't start until previous trade exits
   const final = []
   const usedTimes = new Set()
+  let lastExitTime = 0
+
   for (const t of all) {
     if (usedTimes.has(t.time)) continue
-    let tooClose = false
-    for (const prev of final) {
-      if (t.time - prev.time < 120) { tooClose = true; break }
-    }
-    if (tooClose) continue
+    // Skip if this trade's entry is before the last trade's exit
+    if (t.time <= lastExitTime) continue
+
     t.id = final.length + 1
     final.push(t)
     usedTimes.add(t.time)
+    // Track when this trade exits so no new trade starts during it
+    if (t.exitTime) lastExitTime = t.exitTime
   }
 
   return final
@@ -1782,19 +1784,17 @@ export default async function handler(req, res) {
         const fvgTrades = runBacktestFVGRetraceLong(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
         const momTrades = runBacktestMomentumLong(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
         const allMGC = [...mgcTrades, ...fvgTrades, ...momTrades].sort((a, b) => a.time - b.time)
-        // Dedup
+        // Dedup: no overlapping trades
         trades = []
         const usedTimesL = new Set()
+        let mgcLastExit = 0
         for (const t of allMGC) {
           if (usedTimesL.has(t.time)) continue
-          let dominated = false
-          for (const prev of trades) {
-            if (t.time - prev.time < 120) { dominated = true; break }
-          }
-          if (dominated) continue
+          if (t.time <= mgcLastExit) continue
           t.id = trades.length + 1
           trades.push(t)
           usedTimesL.add(t.time)
+          if (t.exitTime) mgcLastExit = t.exitTime
         }
       } else {
         trades = runBacktestLong(candles5m, candles1m, symbol)
