@@ -82,7 +82,7 @@ const LONG_STRATEGIES = {
     risk: {
       sl: 'Below sweep wick \u2212 3pt buffer',
       tp: 'Previous day high or next swing high above',
-      rr: '1.2:1',
+      rr: '4:1',
       units: '2 contracts',
       cooldown: '10 min between trades',
     },
@@ -104,7 +104,7 @@ const LONG_STRATEGIES = {
     risk: {
       sl: 'Below sweep wick \u2212 3pt buffer',
       tp: 'Equal highs or prev session high',
-      rr: '1.2:1',
+      rr: '4:1',
       units: '2 contracts',
       cooldown: '10 min between trades',
     },
@@ -126,7 +126,7 @@ const LONG_STRATEGIES = {
     risk: {
       sl: 'Below swept low wick \u2212 3pt buffer',
       tp: 'Previous swing high or equal highs',
-      rr: '1.2:1',
+      rr: '4:1',
       units: '2 contracts',
       cooldown: '10 min between trades',
     },

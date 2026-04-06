@@ -271,7 +271,7 @@ const DEFAULT_SL_BOUNDS = { min: 3, max: 60 }
 // Much tighter TP (1.2:1 RR) so longs actually reach target
 const LONG_MAX_LOSS = 300  // max $300 loss per trade
 // Min payout $300 = 1:1 RR with $300 SL. Trailing stop lets winners run to $1500+
-const LONG_SYMBOL_RR = { 'MES1!': 1.0, 'MNQ1!': 1.0, 'MGC1!': 1.0 }
+const LONG_SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 // Fixed SL in points = $300 / (multiplier × contracts)
 const LONG_FIXED_SL  = { 'MES1!': 30, 'MNQ1!': 75, 'MGC1!': 15 }
 const LONG_SL_BOUNDS = {
