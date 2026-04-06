@@ -1574,7 +1574,7 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
       outcome,
       pnlDollars: parseFloat(actualPnl.toFixed(2)),
       contracts: units,
-      rr: parseFloat((finalTPDist / slDist).toFixed(2)),
+      rr: parseFloat((tpDist / slDist).toFixed(2)),
       signal: 'FVG-Retrace-Long',
     })
 
