@@ -261,9 +261,9 @@ export function calcFuturesPnl(entryPrice, exitPrice, symbol, side) {
   return parseFloat(((exitPrice - entryPrice) * mult * dir).toFixed(2))
 }
 
-const MIN_RR = 6
+const MIN_RR = 4
 const FIXED_SL = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 20 }
-const SYMBOL_RR = { 'MES1!': 6, 'MNQ1!': 6, 'MGC1!': 8 }
+const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 // Units (contracts) per trade per symbol
 const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
 // Per-symbol min FVG width for IFVG detection
@@ -317,12 +317,14 @@ function findSweep(recent5m, candles5m, nowTs) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── Strategy A: Sweep + BOS backtest ─────────────────────────────────────────
+const MAX_TRADE_DURATION = 86400  // 1 day in seconds
+
 function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
   const trades = []
   if (!candles5m.length) return trades
 
   const dailyHL = buildDailyHL(candles5m)
-  let lastTradeTime = 0
+  let lastExitTime = 0
   const usedSweeps     = new Set()
   const usedEntryTimes = new Set()
 
@@ -331,7 +333,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     const recent5m = candles5m.slice(Math.max(0, i - 30), i + 1)
 
     if (!isKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 300) continue
+    if (now5m.time <= lastExitTime) continue  // no overlapping trades
 
     const pdhl = getPrevDayHL(dailyHL, now5m.time)
 
@@ -444,6 +446,11 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     let outcome = null, exitPrice = null, exitTime = null
 
     for (const fc of simCandles) {
+      // Max 1-day duration — force close if trade has been open too long
+      if (fc.time - entryCandle.time >= MAX_TRADE_DURATION) {
+        outcome = fc.close > entryPrice === (bias === 'bullish') ? 'win' : 'loss'
+        exitPrice = fc.close; exitTime = fc.time; break
+      }
       if (bias === 'bullish') {
         if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
         if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
@@ -455,7 +462,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
 
     if (!outcome) continue
 
-    const pnlPoints  = outcome === 'win' ? tpDist : -slDist
+    const pnlPoints  = outcome === 'win' ? Math.abs(exitPrice - entryPrice) : -slDist
     const units      = UNITS[symbol] || 1
     const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
 
@@ -475,7 +482,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
 
     usedSweeps.add(sweepTime)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = now5m.time
+    lastExitTime = exitTime || entryCandle.time
   }
 
   return trades
@@ -490,7 +497,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
   const allFVGs  = detectFVGs(candles5m)
   const allIFVGs = detectIFVGs(candles5m, allFVGs, fvgWidth)
 
-  let lastTradeTime    = 0
+  let lastExitTime     = 0
   const usedIFVGs      = new Set()
   const usedEntryTimes = new Set()
   const slBounds       = SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
@@ -501,7 +508,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
     const entryCandle = findMidRetrace(candles5m, ifvg)
     if (!entryCandle) continue
     if (!isKillZone(entryCandle.time)) continue
-    if (entryCandle.time - lastTradeTime < 300) continue
+    if (entryCandle.time <= lastExitTime) continue  // no overlapping trades
     if (usedIFVGs.has(ifvg.time)) continue
     if (usedEntryTimes.has(entryCandle.time)) continue
 
@@ -548,6 +555,11 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
     let outcome = null, exitPrice = null, exitTime = null
 
     for (const fc of simCandles) {
+      if (fc.time - entryCandle.time >= MAX_TRADE_DURATION) {
+        const dir = bias === 'bullish' ? 1 : -1
+        outcome = (fc.close - entryPrice) * dir > 0 ? 'win' : 'loss'
+        exitPrice = fc.close; exitTime = fc.time; break
+      }
       if (bias === 'bullish') {
         if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
         if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
@@ -559,7 +571,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
 
     if (!outcome) continue
 
-    const pnlPoints  = outcome === 'win' ? tpDist : -slDist
+    const pnlPoints  = outcome === 'win' ? Math.abs(exitPrice - entryPrice) : -slDist
     const units      = UNITS[symbol] || 1
     const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
 
@@ -579,7 +591,7 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
 
     usedIFVGs.add(ifvg.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = entryCandle.time
+    lastExitTime = exitTime || entryCandle.time
   }
 
   return trades
@@ -591,7 +603,7 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
   if (!candles5m.length) return trades
 
   const units = UNITS[symbol] || 1
-  let lastTradeTime = 0
+  let lastExitTime = 0
   const usedFVGs = new Set()
   const usedEntryTimes = new Set()
   const slBounds = SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
@@ -606,7 +618,7 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
     const entryCandle = findFVGTapBack(candles5m, fvg)
     if (!entryCandle) continue
     if (!isKillZone(entryCandle.time)) continue
-    if (entryCandle.time - lastTradeTime < 300) continue
+    if (entryCandle.time <= lastExitTime) continue  // no overlapping trades
     if (usedFVGs.has(fvg.time)) continue
     if (usedEntryTimes.has(entryCandle.time)) continue
 
@@ -650,6 +662,11 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
     let outcome = null, exitPrice = null, exitTime = null
 
     for (const fc of simCandles) {
+      // Max 1-day duration
+      if (fc.time - entryCandle.time >= MAX_TRADE_DURATION) {
+        outcome = fc.close > entryPrice ? 'win' : 'loss'
+        exitPrice = fc.close; exitTime = fc.time; break
+      }
       // Long trade: SL below, TP above
       if (fc.low  <= slPrice) { outcome = 'loss'; exitPrice = slPrice; exitTime = fc.time; break }
       if (fc.high >= tpPrice) { outcome = 'win';  exitPrice = tpPrice; exitTime = fc.time; break }
@@ -657,7 +674,7 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
 
     if (!outcome) continue
 
-    const pnlPoints  = outcome === 'win' ? tpDist : -slDist
+    const pnlPoints  = outcome === 'win' ? Math.abs(exitPrice - entryPrice) : -slDist
     const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
 
     trades.push({
@@ -676,7 +693,7 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
 
     usedFVGs.add(fvg.time)
     usedEntryTimes.add(entryCandle.time)
-    lastTradeTime = entryCandle.time
+    lastExitTime = exitTime || entryCandle.time
   }
 
   return trades
@@ -694,26 +711,18 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
   // Merge and sort by entry time
   const all = [...sweepTrades, ...ifvgTrades, ...tapBackTrades].sort((a, b) => a.time - b.time)
 
-  // Dedup:
-  //  1. Exact same entry timestamp = duplicate (drop the second)
-  //  2. Same bias within 10 min = same market move (drop the second)
-  //  3. Any trade within 3 min of another = too close (drop the second)
+  // Dedup: no overlapping trades — new trade can't start until previous trade exits
   const final = []
   const usedTimes = new Set()
+  let lastExitTime = 0
   for (const t of all) {
     if (usedTimes.has(t.time)) continue
-
-    let dominated = false
-    for (const prev of final) {
-      const gap = t.time - prev.time
-      if (gap < 180) { dominated = true; break }
-      if (gap < 600 && t.bias === prev.bias) { dominated = true; break }
-    }
-    if (dominated) continue
+    if (t.time <= lastExitTime) continue  // no overlapping trades
 
     t.id = final.length + 1
     final.push(t)
     usedTimes.add(t.time)
+    if (t.exitTime) lastExitTime = t.exitTime
   }
 
   return final

@@ -1,7 +1,7 @@
 import { FUTURES } from '../store'
 import { CONTRACT_MULTIPLIER } from '../utils/strategy'
 
-const SYMBOL_RR = { 'MES1!': 6, 'MNQ1!': 6, 'MGC1!': 8 }
+const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 const UNITS     = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
 const FIXED_SL  = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 20 }
 const FVG_WIDTH = { 'MES1!': 5, 'MNQ1!': 16, 'MGC1!': 4 }
