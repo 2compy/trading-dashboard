@@ -470,14 +470,14 @@ function runBacktestMGC(candles5m) {
     const bias = trend4h
     if (bias === 'bullish') continue
 
-    // ── TP at 75% of nearest 1h swing H/L beyond current price ────────────────
+    // ── TP at 1.5x the nearest 1h swing H/L beyond current price ──────────────
     let tpPrice = null
     if (bias === 'bullish') {
       const cands = h1h.filter(h => h.price > now5m.close).sort((a, b) => a.price - b.price)
-      if (cands[0]) tpPrice = now5m.close + (cands[0].price - now5m.close) * 0.75
+      if (cands[0]) tpPrice = now5m.close + (cands[0].price - now5m.close) * 1.5
     } else {
       const cands = l1h.filter(l => l.price < now5m.close).sort((a, b) => b.price - a.price)
-      if (cands[0]) tpPrice = now5m.close - (now5m.close - cands[0].price) * 0.75
+      if (cands[0]) tpPrice = now5m.close - (now5m.close - cands[0].price) * 1.5
     }
     if (!tpPrice) continue
 
