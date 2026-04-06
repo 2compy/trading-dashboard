@@ -338,6 +338,12 @@ export const useStore = create(
           // Use strategy direction, not symbolSide (fixes counter-signal bug)
           const side = result.direction
 
+          // No overlapping LONG trades: skip if there's already an open LONG on this symbol
+          if (side === 'LONG') {
+            const hasOpenLong = state.trades.some(t => t.symbol === f.symbol && t.side === 'LONG' && t.status === 'OPEN')
+            if (hasOpenLong) return
+          }
+
           for (let i = 0; i < count; i++) {
             newTrades.push({
               id: nextId++,
@@ -398,6 +404,12 @@ export const useStore = create(
 
           const price = state.livePrice[f.symbol]
           const side = result.direction
+
+          // No overlapping LONG trades: skip if there's already an open LONG on this symbol
+          if (side === 'LONG') {
+            const hasOpenLong = state.paperTrades.some(t => t.symbol === f.symbol && t.side === 'LONG' && t.status === 'OPEN')
+            if (hasOpenLong) return
+          }
 
           newTrades.push({
             id: nextId++,
