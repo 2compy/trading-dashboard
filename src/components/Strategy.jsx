@@ -4,6 +4,7 @@ import { CONTRACT_MULTIPLIER } from '../utils/strategy'
 const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 const UNITS     = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
 const FIXED_SL  = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 20 }
+const FIXED_TP  = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 50 }
 const FVG_WIDTH = { 'MES1!': 5, 'MNQ1!': 16, 'MGC1!': 4 }
 
 // ── SHORT strategies per symbol ──────────────────────────────────────────────
@@ -19,10 +20,10 @@ const SHORT_STRATEGIES = {
     ],
     risk: {
       sl: 'Sweep wick extreme + 2pt buffer (min 5pt, max 30pt)',
-      tp: 'Nearest swing low \u2265 SL \u00d7 6 distance (search window extends 30pt beyond)',
-      rr: '6:1',
+      tp: 'Nearest swing low \u2265 SL \u00d7 4 distance (search window extends 30pt beyond)',
+      rr: '4:1',
       units: '2 contracts',
-      cooldown: '5 min between trades, 10 min same-bias dedup',
+      cooldown: 'No overlapping trades \u2014 next entry after previous exit',
     },
     signals: ['Sweep+BOS', 'Sweep+BOS+1mIFVG', 'IFVG-Mid-Retrace'],
   },
@@ -33,14 +34,14 @@ const SHORT_STRATEGIES = {
       'Kill Zones: Asia 8pm\u2013midnight ET, London 3\u20135am ET, NY 8:30am\u201312pm ET, NY PM 1:30\u20133pm ET',
       'Strategy A \u2014 Sweep + BOS: Prev day H/L or session H/L bearish sweep, then 5M BOS bearish confirmation. Entry on 1M FVG + IFVG retrace, or fallback to next 5M open after BOS.',
       'Strategy B \u2014 IFVG Mid Retrace: Find 5M FVGs \u2265 16pt wide that get inversed. After inversion, wait for midpoint retrace \u2192 SHORT entry.',
-      'Fixed SL of 35pt. Either strategy can trigger.',
+      'Fixed SL of 20pt. Either strategy can trigger.',
     ],
     risk: {
       sl: 'Fixed 20pt',
-      tp: 'Nearest swing low \u2265 SL \u00d7 6 distance',
-      rr: '6:1',
+      tp: 'Nearest swing low \u2265 SL \u00d7 4 distance',
+      rr: '4:1',
       units: '2 contracts',
-      cooldown: '5 min between trades, 10 min same-bias dedup',
+      cooldown: 'No overlapping trades \u2014 next entry after previous exit',
     },
     signals: ['Sweep+BOS', 'Sweep+BOS+1mIFVG', 'IFVG-Mid-Retrace'],
   },
@@ -55,10 +56,10 @@ const SHORT_STRATEGIES = {
     ],
     risk: {
       sl: 'Fixed 20pt',
-      tp: 'HTF: nearest 1H swing low beyond entry. IFVG: dynamic \u2265 SL \u00d7 8',
-      rr: '8:1',
+      tp: 'Fixed 50pt',
+      rr: '2.5:1',
       units: '2 contracts',
-      cooldown: '5 min between trades, 10 min same-bias dedup',
+      cooldown: 'No overlapping trades \u2014 next entry after previous exit',
     },
     signals: ['HTFBias+4h/1hClean+5mFVG+MidRetrace', 'IFVG-Mid-Retrace'],
   },
@@ -78,10 +79,10 @@ const LONG_STRATEGIES = {
     ],
     risk: {
       sl: 'Sweep wick extreme + 2pt buffer (min 5pt, max 30pt). SL is fixed at entry \u2014 never moves.',
-      tp: 'Nearest swing high \u2265 SL \u00d7 6 distance (search window extends 30pt beyond). TP is fixed at entry \u2014 never moves.',
-      rr: '6:1',
+      tp: 'Nearest swing high \u2265 SL \u00d7 4 distance (search window extends 30pt beyond). TP is fixed at entry \u2014 never moves.',
+      rr: '4:1',
       units: '2 contracts',
-      cooldown: '5 min between trades, 10 min same-bias dedup',
+      cooldown: 'No overlapping trades \u2014 next entry after previous exit',
     },
     signals: ['Sweep+BOS', 'Sweep+BOS+1mIFVG', 'IFVG-Mid-Retrace', 'Uptrend-FVG-TapBack'],
   },
@@ -93,14 +94,14 @@ const LONG_STRATEGIES = {
       'Strategy A \u2014 Sweep + BOS: Prev day H/L or session H/L bullish sweep, then 5M BOS bullish confirmation. Entry on 1M FVG + IFVG retrace, or fallback to next 5M open after BOS.',
       'Strategy B \u2014 IFVG Mid Retrace: Find 5M FVGs \u2265 16pt wide that get inversed. After inversion, wait for midpoint retrace \u2192 LONG entry.',
       'Strategy C \u2014 Uptrend FVG Tap-Back: Bullish FVG forms in an uptrend (\u22652 higher highs + higher lows), FVG must be \u2265 4pt wide. Wait for price to tap back into the FVG zone \u2192 LONG entry at FVG midpoint. SL/TP are fixed at entry and never move.',
-      'Fixed SL of 35pt. Any strategy can trigger.',
+      'Fixed SL of 20pt. Any strategy can trigger.',
     ],
     risk: {
       sl: 'Fixed 20pt. SL is fixed at entry \u2014 never moves.',
-      tp: 'Nearest swing high \u2265 SL \u00d7 6 distance. TP is fixed at entry \u2014 never moves.',
-      rr: '6:1',
+      tp: 'Nearest swing high \u2265 SL \u00d7 4 distance. TP is fixed at entry \u2014 never moves.',
+      rr: '4:1',
       units: '2 contracts',
-      cooldown: '5 min between trades, 10 min same-bias dedup',
+      cooldown: 'No overlapping trades \u2014 next entry after previous exit',
     },
     signals: ['Sweep+BOS', 'Sweep+BOS+1mIFVG', 'IFVG-Mid-Retrace', 'Uptrend-FVG-TapBack'],
   },
@@ -116,10 +117,10 @@ const LONG_STRATEGIES = {
     ],
     risk: {
       sl: 'Fixed 20pt. SL is fixed at entry \u2014 never moves.',
-      tp: 'HTF: nearest 1H swing high beyond entry. IFVG/FVG Tap-Back: dynamic \u2265 SL \u00d7 8. TP is fixed at entry \u2014 never moves.',
-      rr: '8:1',
+      tp: 'Fixed 50pt. TP is fixed at entry \u2014 never moves.',
+      rr: '2.5:1',
       units: '2 contracts',
-      cooldown: '5 min between trades, 10 min same-bias dedup',
+      cooldown: 'No overlapping trades \u2014 next entry after previous exit',
     },
     signals: ['HTFBias+4h/1hClean+5mFVG+MidRetrace', 'IFVG-Mid-Retrace', 'Uptrend-FVG-TapBack'],
   },

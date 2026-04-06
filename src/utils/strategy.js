@@ -263,6 +263,7 @@ export function calcFuturesPnl(entryPrice, exitPrice, symbol, side) {
 
 const MIN_RR = 4
 const FIXED_SL = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 20 }
+const FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 50 }
 const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 // Units (contracts) per trade per symbol
 const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
@@ -419,24 +420,29 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
       if (slDist > 30) continue
     }
 
-    const rr = SYMBOL_RR[symbol] || MIN_RR
-    const minTPDist = slDist * rr
-    const maxTPDist = minTPDist + 30
-    const { highs, lows } = detectSwings(recent5m, 3)
     let tpPrice
-    if (bias === 'bullish') {
-      const c = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
-      tpPrice = c[0]?.price ?? entryPrice + minTPDist
+    const fixedTP = FIXED_TP[symbol]
+    if (fixedTP != null) {
+      tpPrice = bias === 'bullish' ? entryPrice + fixedTP : entryPrice - fixedTP
     } else {
-      const c = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
-      tpPrice = c[0]?.price ?? entryPrice - minTPDist
+      const rr = SYMBOL_RR[symbol] || MIN_RR
+      const minTPDist = slDist * rr
+      const maxTPDist = minTPDist + 30
+      const { highs, lows } = detectSwings(recent5m, 3)
+      if (bias === 'bullish') {
+        const c = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+        tpPrice = c[0]?.price ?? entryPrice + minTPDist
+      } else {
+        const c = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
+        tpPrice = c[0]?.price ?? entryPrice - minTPDist
+      }
     }
 
     if (bias === 'bullish' && tpPrice <= entryPrice) continue
     if (bias === 'bearish' && tpPrice >= entryPrice) continue
 
     const tpDist = Math.abs(tpPrice - entryPrice)
-    if (tpDist / slDist < MIN_RR) continue
+    if (fixedTP == null && tpDist / slDist < MIN_RR) continue
 
     const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
     const future1m   = candles1m.slice(entryIdx1m + 1, entryIdx1m + 720)
@@ -525,28 +531,33 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
     }
     slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
 
-    const rr2 = SYMBOL_RR[symbol] || MIN_RR
-    const minTPDist = slDist * rr2
-    const maxTPDist = minTPDist + 30
-
-    const entryIdx  = candles5m.findIndex(c => c.time >= entryCandle.time)
-    const recent5m  = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
-    const { highs, lows } = detectSwings(recent5m, 3)
-
     let tpPrice
-    if (bias === 'bullish') {
-      const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
-      tpPrice = targets[0]?.price ?? entryPrice + minTPDist
+    const fixedTP2 = FIXED_TP[symbol]
+    if (fixedTP2 != null) {
+      tpPrice = bias === 'bullish' ? entryPrice + fixedTP2 : entryPrice - fixedTP2
     } else {
-      const targets = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
-      tpPrice = targets[0]?.price ?? entryPrice - minTPDist
+      const rr2 = SYMBOL_RR[symbol] || MIN_RR
+      const minTPDist = slDist * rr2
+      const maxTPDist = minTPDist + 30
+
+      const entryIdx  = candles5m.findIndex(c => c.time >= entryCandle.time)
+      const recent5m  = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
+      const { highs, lows } = detectSwings(recent5m, 3)
+
+      if (bias === 'bullish') {
+        const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+        tpPrice = targets[0]?.price ?? entryPrice + minTPDist
+      } else {
+        const targets = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
+        tpPrice = targets[0]?.price ?? entryPrice - minTPDist
+      }
     }
 
     if (bias === 'bullish' && tpPrice <= entryPrice) continue
     if (bias === 'bearish' && tpPrice >= entryPrice) continue
 
     const tpDist = Math.abs(tpPrice - entryPrice)
-    if (tpDist / slDist < MIN_RR) continue
+    if (fixedTP2 == null && tpDist / slDist < MIN_RR) continue
 
     const entryIdx1m = candles1m?.length ? candles1m.findIndex(c => c.time >= entryCandle.time) : -1
     const simCandles = entryIdx1m >= 0 && entryIdx1m < candles1m.length - 1
@@ -636,23 +647,28 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
     }
     slPrice = entryPrice - slDist
 
-    // TP: dynamic R:R
-    const rr = SYMBOL_RR[symbol] || MIN_RR
-    const minTPDist = slDist * rr
-    const maxTPDist = minTPDist + 30
-
-    const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
-    const recent5m = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
-    const { highs } = detectSwings(recent5m, 3)
-
+    // TP
     let tpPrice
-    const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
-    tpPrice = targets[0]?.price ?? entryPrice + minTPDist
+    const fixedTP3 = FIXED_TP[symbol]
+    if (fixedTP3 != null) {
+      tpPrice = entryPrice + fixedTP3
+    } else {
+      const rr = SYMBOL_RR[symbol] || MIN_RR
+      const minTPDist = slDist * rr
+      const maxTPDist = minTPDist + 30
+
+      const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
+      const recent5m = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
+      const { highs } = detectSwings(recent5m, 3)
+
+      const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+      tpPrice = targets[0]?.price ?? entryPrice + minTPDist
+    }
 
     if (tpPrice <= entryPrice) continue
 
     const tpDist = Math.abs(tpPrice - entryPrice)
-    if (tpDist / slDist < MIN_RR) continue
+    if (fixedTP3 == null && tpDist / slDist < MIN_RR) continue
 
     // Simulate on 1m data if available, fallback to 5m
     const entryIdx1m = candles1m?.length ? candles1m.findIndex(c => c.time >= entryCandle.time) : -1

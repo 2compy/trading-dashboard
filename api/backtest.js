@@ -250,6 +250,9 @@ function findIFVGEntry(candles, fvg, bias) {
 
 // ── Fixed SL per symbol (null = use sweep wick) ─────────────────────────────
 const FIXED_SL = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 20 }
+// ── Fixed TP distance per symbol (null = use R:R calculation) ───────────────
+const FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 50 }
+const LONG_FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 50 }
 // ── Min R:R per symbol ──────────────────────────────────────────────────────
 const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 // ── Min FVG width for IFVG detection, per symbol ────────────────────────────
@@ -392,6 +395,13 @@ function getTPSLLong(bias, entryPrice, sweepWickExtreme, recent5m, symbol) {
     if (slDist > slBounds.max) return null
   }
 
+  // Fixed TP override (e.g. MGC = 50pt)
+  const fixedTP = LONG_FIXED_TP[symbol]
+  if (fixedTP != null) {
+    const tpPrice = entryPrice + fixedTP
+    return { slPrice, tpPrice }
+  }
+
   const rr = LONG_SYMBOL_RR[symbol] || 4
   const minTPDist = slDist * rr
   const maxTPDist = minTPDist + 30
@@ -418,6 +428,13 @@ function getTPSL(bias, entryPrice, sweepWickExtreme, recent5m, symbol) {
     if (bias === 'bearish' && slPrice - entryPrice < 10) slPrice = entryPrice + 10
     slDist = Math.abs(entryPrice - slPrice)
     if (slDist > 60) return null
+  }
+
+  // Fixed TP override (e.g. MGC = 50pt)
+  const fixedTP = FIXED_TP[symbol]
+  if (fixedTP != null) {
+    const tpPrice = bias === 'bullish' ? entryPrice + fixedTP : entryPrice - fixedTP
+    return { slPrice, tpPrice }
   }
 
   const rr = SYMBOL_RR[symbol] || MIN_RR
@@ -478,16 +495,9 @@ function runBacktestMGC(candles5m) {
     if (bias1h !== trend4h) continue
     const bias = trend4h
 
-    // ── TP at 1.5x the nearest 1h swing H/L beyond current price ──────────────
-    let tpPrice = null
-    if (bias === 'bullish') {
-      const cands = h1h.filter(h => h.price > now5m.close).sort((a, b) => a.price - b.price)
-      if (cands[0]) tpPrice = now5m.close + (cands[0].price - now5m.close) * 1.5
-    } else {
-      const cands = l1h.filter(l => l.price < now5m.close).sort((a, b) => b.price - a.price)
-      if (cands[0]) tpPrice = now5m.close - (now5m.close - cands[0].price) * 1.5
-    }
-    if (!tpPrice) continue
+    // ── TP: fixed 50pt for MGC ─────────────────────────────────────────────────
+    const mgcTP = FIXED_TP['MGC1!'] || 50
+    const tpPrice = bias === 'bullish' ? now5m.close + mgcTP : now5m.close - mgcTP
 
     // ── 4h FVG check: no open FVG blocking path to TP ────────────────────────
     if (hasFVGBlocking(recent4h, now5m.close, tpPrice)) continue
@@ -523,7 +533,7 @@ function runBacktestMGC(candles5m) {
     if (usedEntryTimes.has(entryCandle.time)) continue
     const entryPrice = fvg5m.mid
 
-    // ── SL: $200 risk per contract. MGC multiplier = 10, so 200/10 = 20 points
+    // ── SL: fixed 20pt. TP: fixed 50pt ─────────────────────────────────────────
     const slPrice = bias === 'bullish' ? entryPrice - 20 : entryPrice + 20
 
     if (bias === 'bullish' && tpPrice <= entryPrice) continue
@@ -531,7 +541,6 @@ function runBacktestMGC(candles5m) {
 
     const slDist = 20
     const tpDist = Math.abs(tpPrice - entryPrice)
-    if (tpDist / slDist < (SYMBOL_RR['MGC1!'] || MIN_RR)) continue
 
     // ── Simulate trade ─────────────────────────────────────────────────────────
     const entryIdx = candles5m.indexOf(entryCandle)
@@ -671,18 +680,13 @@ function runBacktestMGCLong(candles5m) {
     // ── 6. SL below swept low wick - 3pt buffer, capped to $300 max loss ─────
     const slPrice = capLongSL(entryPrice, sweepWickLow - 3, 'MGC1!')
 
-    // ── 7. TP at previous swing high or equal highs above ─────────────────────
-    const tpCands = h5m.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)
-    if (!tpCands.length) continue
-    const tpPrice = tpCands[0].price
-
-    if (tpPrice <= entryPrice) continue
+    // ── 7. TP: fixed 50pt for MGC ──────────────────────────────────────────────
+    const mgcLongTP = LONG_FIXED_TP['MGC1!'] || 50
+    const tpPrice = entryPrice + mgcLongTP
 
     const slDist = Math.abs(entryPrice - slPrice)
-    const tpDist = Math.abs(tpPrice - entryPrice)
-    if (slDist === 0 || tpDist <= 0) continue
-    if (tpDist / slDist < (LONG_SYMBOL_RR['MGC1!'] || 4)) continue
-    if (tpDist / slDist > 16) continue
+    const tpDist = mgcLongTP
+    if (slDist === 0) continue
 
     // ── Simulate trade ────────────────────────────────────────────────────────
     const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
@@ -862,7 +866,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     const slDist = Math.abs(entryPrice - slPrice)
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (slDist === 0 || tpDist <= 0) continue
-    if (tpDist / slDist < (SYMBOL_RR[symbol] || MIN_RR)) continue
+    if (FIXED_TP[symbol] == null && tpDist / slDist < (SYMBOL_RR[symbol] || MIN_RR)) continue
 
     const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
     const future1m   = candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
@@ -1008,19 +1012,25 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       // 6. SL below sweep wick - 3pt, capped to $300 max loss
       const slPrice = capLongSL(entryPrice, sweepWickLow - 3, symbol)
 
-      // 7. TP at equal highs or prev session high
-      const { highs: h5m } = detectSwings(recent5m, 2)
-      const tpCands = h5m.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)
-      if (!tpCands.length) continue
-      const tpPrice = tpCands[0].price
+      // 7. TP: fixed override or swing high target
+      let tpPrice
+      const sweepFixedTP = LONG_FIXED_TP[symbol]
+      if (sweepFixedTP != null) {
+        tpPrice = entryPrice + sweepFixedTP
+      } else {
+        const { highs: h5m } = detectSwings(recent5m, 2)
+        const tpCands = h5m.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)
+        if (!tpCands.length) continue
+        tpPrice = tpCands[0].price
+      }
 
       if (tpPrice <= entryPrice) continue
 
       const slDist = Math.abs(entryPrice - slPrice)
       const tpDist = Math.abs(tpPrice - entryPrice)
       if (slDist === 0 || tpDist <= 0) continue
-      if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 4)) continue
-      if (tpDist / slDist > 16) continue
+      if (sweepFixedTP == null && tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 4)) continue
+      if (sweepFixedTP == null && tpDist / slDist > 16) continue
 
       // Simulate on 1m data if available
       const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
@@ -1176,12 +1186,14 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       // 6. SL below sweep wick - 3pt, capped to $300 max loss
       const slPrice = capLongSL(entryPrice, sweepWickLow - 3, symbol)
 
-      // 7. TP at prev day high
+      // 7. TP: fixed override or prev day high
       let tpPrice = null
-      if (pdhl) {
+      const pdFixedTP = LONG_FIXED_TP[symbol]
+      if (pdFixedTP != null) {
+        tpPrice = entryPrice + pdFixedTP
+      } else if (pdhl) {
         tpPrice = pdhl.high
       } else {
-        // Fallback to next swing high
         const { highs: h5m } = detectSwings(recent5m, 2)
         const tpCands = h5m.filter(h => h.price > entryPrice).sort((a, b) => a.price - b.price)
         tpPrice = tpCands[0]?.price
@@ -1192,8 +1204,8 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       const slDist = Math.abs(entryPrice - slPrice)
       const tpDist = Math.abs(tpPrice - entryPrice)
       if (slDist === 0 || tpDist <= 0) continue
-      if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 4)) continue
-      if (tpDist / slDist > 16) continue
+      if (pdFixedTP == null && tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 4)) continue
+      if (pdFixedTP == null && tpDist / slDist > 16) continue
 
       // Simulate trade
       const entryIdx1m = candles1m.findIndex(c => c.time >= entryCandle.time)
@@ -1279,29 +1291,36 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     }
     slPrice = bias === 'bullish' ? entryPrice - slDist : entryPrice + slDist
 
-    // TP: dynamic, minimum R:R per symbol
-    const minRR_sym = SYMBOL_RR[symbol] || MIN_RR
-    const minTPDist = slDist * minRR_sym
-    const maxTPDist = minTPDist + 30
-
-    const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
-    const recent5m = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
-    const { highs, lows } = detectSwings(recent5m, 3)
-
+    // TP: fixed override or dynamic R:R
     let tpPrice
-    if (bias === 'bullish') {
-      const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
-      tpPrice = targets[0]?.price ?? entryPrice + minTPDist
+    const fixedTPVal = FIXED_TP[symbol]
+    if (fixedTPVal != null) {
+      tpPrice = bias === 'bullish' ? entryPrice + fixedTPVal : entryPrice - fixedTPVal
     } else {
-      const targets = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
-      tpPrice = targets[0]?.price ?? entryPrice - minTPDist
+      const minRR_sym = SYMBOL_RR[symbol] || MIN_RR
+      const minTPDist = slDist * minRR_sym
+      const maxTPDist = minTPDist + 30
+
+      const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
+      const recent5m = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
+      const { highs, lows } = detectSwings(recent5m, 3)
+
+      if (bias === 'bullish') {
+        const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+        tpPrice = targets[0]?.price ?? entryPrice + minTPDist
+      } else {
+        const targets = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
+        tpPrice = targets[0]?.price ?? entryPrice - minTPDist
+      }
+
+      const tpDistCheck = Math.abs(tpPrice - entryPrice)
+      if (tpDistCheck / slDist < minRR_sym) continue
     }
 
     if (bias === 'bullish' && tpPrice <= entryPrice) continue
     if (bias === 'bearish' && tpPrice >= entryPrice) continue
 
     const tpDist = Math.abs(tpPrice - entryPrice)
-    if (tpDist / slDist < minRR_sym) continue
 
     // Simulate trade: use 1m candles if available, else 5m
     const entryIdx1m = candles1m?.length ? candles1m.findIndex(c => c.time >= entryCandle.time) : -1
@@ -1392,24 +1411,31 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
     }
     slPrice = entryPrice - slDist
 
-    // TP: dynamic, long-specific 1.2:1 R:R
-    const minRR_sym = LONG_SYMBOL_RR[symbol] || 4
-    const minTPDist = slDist * minRR_sym
-    const maxTPDist = minTPDist + 30
-
-    const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
-    const recent5m = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
-    const { highs } = detectSwings(recent5m, 3)
-
+    // TP: fixed override or dynamic R:R
     let tpPrice
-    const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
-    tpPrice = targets[0]?.price ?? entryPrice + minTPDist
+    const fixedTPLong = LONG_FIXED_TP[symbol]
+    if (fixedTPLong != null) {
+      tpPrice = entryPrice + fixedTPLong
+    } else {
+      const minRR_sym = LONG_SYMBOL_RR[symbol] || 4
+      const minTPDist = slDist * minRR_sym
+      const maxTPDist = minTPDist + 30
+
+      const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
+      const recent5m = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
+      const { highs } = detectSwings(recent5m, 3)
+
+      const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+      tpPrice = targets[0]?.price ?? entryPrice + minTPDist
+
+      const tpDistCheck = Math.abs(tpPrice - entryPrice)
+      if (tpDistCheck / slDist < minRR_sym) continue
+      if (tpDistCheck / slDist > 16) continue
+    }
 
     if (tpPrice <= entryPrice) continue
 
     const tpDist = Math.abs(tpPrice - entryPrice)
-    if (tpDist / slDist < minRR_sym) continue
-    if (tpDist / slDist > 16) continue
 
     // Smart long simulation (TP-first, breakeven, time exit)
     const entryIdx1m = candles1m?.length ? candles1m.findIndex(c => c.time >= entryCandle.time) : -1
@@ -1603,9 +1629,14 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     if (slDist <= 0 || tpDist <= 0) continue
     if (tpDist / slDist > 16) continue
 
-    // If TP is very close (< 1:1), bump it to at least 1:1
-    const fvgMinRR = LONG_SYMBOL_RR[symbol] || 4
-    if (tpDist / slDist < fvgMinRR) tpPrice = entryPrice + slDist * fvgMinRR
+    // Fixed TP override or dynamic R:R floor
+    const fvgFixedTP = LONG_FIXED_TP[symbol]
+    if (fvgFixedTP != null) {
+      tpPrice = entryPrice + fvgFixedTP
+    } else {
+      const fvgMinRR = LONG_SYMBOL_RR[symbol] || 4
+      if (tpDist / slDist < fvgMinRR) tpPrice = entryPrice + slDist * fvgMinRR
+    }
 
     const finalTPDist = Math.abs(tpPrice - entryPrice)
 
@@ -1700,8 +1731,13 @@ function runBacktestMomentumLong(candles5m, candles1m, symbol, multiplier) {
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (slDist <= 0 || tpDist <= 0) continue
     if (tpDist / slDist > 16) continue
-    const momMinRR = LONG_SYMBOL_RR[symbol] || 4
-    if (tpDist / slDist < momMinRR) tpPrice = entryPrice + slDist * momMinRR
+    const momFixedTP = LONG_FIXED_TP[symbol]
+    if (momFixedTP != null) {
+      tpPrice = entryPrice + momFixedTP
+    } else {
+      const momMinRR = LONG_SYMBOL_RR[symbol] || 4
+      if (tpDist / slDist < momMinRR) tpPrice = entryPrice + slDist * momMinRR
+    }
     if (tpPrice <= entryPrice) continue
 
     // Simulate
@@ -1823,23 +1859,30 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
     }
     slPrice = entryPrice - slDist
 
-    // TP: dynamic R:R — FIXED at entry, never moves
-    const rr = LONG_SYMBOL_RR[symbol] || 4
-    const minTPDist = slDist * rr
-    const maxTPDist = minTPDist + 30
-
-    const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
-    const recent5m = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
-    const { highs } = detectSwings(recent5m, 3)
-
+    // TP: fixed override or dynamic R:R — FIXED at entry, never moves
     let tpPrice
-    const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
-    tpPrice = targets[0]?.price ?? entryPrice + minTPDist
+    const tapFixedTP = LONG_FIXED_TP[symbol]
+    if (tapFixedTP != null) {
+      tpPrice = entryPrice + tapFixedTP
+    } else {
+      const rr = LONG_SYMBOL_RR[symbol] || 4
+      const minTPDist = slDist * rr
+      const maxTPDist = minTPDist + 30
+
+      const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
+      const recent5m = candles5m.slice(Math.max(0, entryIdx - 30), entryIdx + 1)
+      const { highs } = detectSwings(recent5m, 3)
+
+      const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+      tpPrice = targets[0]?.price ?? entryPrice + minTPDist
+
+      const tpDistCheck = Math.abs(tpPrice - entryPrice)
+      if (tpDistCheck / slDist < rr) continue
+      if (tpDistCheck / slDist > 16) continue
+    }
 
     if (tpPrice <= entryPrice) continue
     const tpDist = Math.abs(tpPrice - entryPrice)
-    if (tpDist / slDist < rr) continue
-    if (tpDist / slDist > 16) continue
 
     // Simulate with FIXED SL/TP — no trailing, no adjustment
     const ei1m = candles1m.findIndex(c => c.time >= entryCandle.time)
