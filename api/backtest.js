@@ -383,7 +383,7 @@ function getTPSLLong(bias, entryPrice, sweepWickExtreme, recent5m, symbol) {
     if (slDist > slBounds.max) return null
   }
 
-  const rr = LONG_SYMBOL_RR[symbol] || 1.2
+  const rr = LONG_SYMBOL_RR[symbol] || 4
   const minTPDist = slDist * rr
   const maxTPDist = minTPDist + 30
 
@@ -673,7 +673,7 @@ function runBacktestMGCLong(candles5m) {
     const slDist = Math.abs(entryPrice - slPrice)
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (slDist === 0 || tpDist <= 0) continue
-    if (tpDist / slDist < (LONG_SYMBOL_RR['MGC1!'] || 1.2)) continue
+    if (tpDist / slDist < (LONG_SYMBOL_RR['MGC1!'] || 4)) continue
     if (tpDist / slDist > 16) continue
 
     // ── Simulate trade ────────────────────────────────────────────────────────
@@ -1012,7 +1012,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       const slDist = Math.abs(entryPrice - slPrice)
       const tpDist = Math.abs(tpPrice - entryPrice)
       if (slDist === 0 || tpDist <= 0) continue
-      if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 1.2)) continue
+      if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 4)) continue
       if (tpDist / slDist > 16) continue
 
       // Simulate on 1m data if available
@@ -1185,7 +1185,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       const slDist = Math.abs(entryPrice - slPrice)
       const tpDist = Math.abs(tpPrice - entryPrice)
       if (slDist === 0 || tpDist <= 0) continue
-      if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 1.2)) continue
+      if (tpDist / slDist < (LONG_SYMBOL_RR[symbol] || 4)) continue
       if (tpDist / slDist > 16) continue
 
       // Simulate trade
@@ -1387,7 +1387,7 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
     slPrice = entryPrice - slDist
 
     // TP: dynamic, long-specific 1.2:1 R:R
-    const minRR_sym = LONG_SYMBOL_RR[symbol] || 1.2
+    const minRR_sym = LONG_SYMBOL_RR[symbol] || 4
     const minTPDist = slDist * minRR_sym
     const maxTPDist = minTPDist + 30
 
@@ -1597,7 +1597,7 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     if (tpDist / slDist > 16) continue
 
     // If TP is very close (< 1:1), bump it to at least 1:1
-    const fvgMinRR = LONG_SYMBOL_RR[symbol] || 1.0
+    const fvgMinRR = LONG_SYMBOL_RR[symbol] || 4
     if (tpDist / slDist < fvgMinRR) tpPrice = entryPrice + slDist * fvgMinRR
 
     const finalTPDist = Math.abs(tpPrice - entryPrice)
@@ -1693,7 +1693,7 @@ function runBacktestMomentumLong(candles5m, candles1m, symbol, multiplier) {
     const tpDist = Math.abs(tpPrice - entryPrice)
     if (slDist <= 0 || tpDist <= 0) continue
     if (tpDist / slDist > 16) continue
-    const momMinRR = LONG_SYMBOL_RR[symbol] || 1.0
+    const momMinRR = LONG_SYMBOL_RR[symbol] || 4
     if (tpDist / slDist < momMinRR) tpPrice = entryPrice + slDist * momMinRR
     if (tpPrice <= entryPrice) continue
 
