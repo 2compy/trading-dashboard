@@ -584,10 +584,8 @@ export function getSignalDebugInfo(candles5m, candles1m, symbol = 'MES1!') {
       const latestIFVG  = ifvgs[ifvgs.length - 1]
       const entryCandle = findMidRetrace(recent5m, latestIFVG)
       if (entryCandle) {
-        if (latestIFVG.ifvgBias === 'bullish') {
-          return { signal: null, step: 'signal', label: `Shorts only — skipping LONG IFVG mid retrace at ${latestIFVG.mid.toFixed(2)}` }
-        }
-        return { signal: 'SHORT', step: 'signal', label: `\ud83d\udfe2 SHORT signal \u2014 IFVG mid retrace at ${latestIFVG.mid.toFixed(2)}` }
+        const dir = latestIFVG.ifvgBias === 'bullish' ? 'LONG' : 'SHORT'
+        return { signal: dir, step: 'signal', label: `${dir} signal — IFVG mid retrace at ${latestIFVG.mid.toFixed(2)}` }
       }
     }
   }
@@ -627,20 +625,16 @@ export function getSignalDebugInfo(candles5m, candles1m, symbol = 'MES1!') {
               const m1PostFVG = m1After.filter(c => c.time > fvg1m.time)
               const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, sweepBias)
               if (entryCandle) {
-                if (sweepBias === 'bullish') {
-                  return { signal: null, step: 'signal', label: `Shorts only — skipping LONG signal (Sweep+BOS+1m IFVG)` }
-                }
-                return { signal: 'SHORT', step: 'signal', label: `\ud83d\udfe2 SHORT signal (Sweep+BOS+1m IFVG)` }
+                const dir2 = sweepBias === 'bullish' ? 'LONG' : 'SHORT'
+                return { signal: dir2, step: 'signal', label: `${dir2} signal (Sweep+BOS+1m IFVG)` }
               }
             }
           }
         }
 
         // 5M fallback
-        if (sweepBias === 'bullish') {
-          return { signal: null, step: 'signal', label: `Shorts only — skipping LONG signal (Sweep+BOS fallback)` }
-        }
-        return { signal: 'SHORT', step: 'signal', label: `\ud83d\udfe2 SHORT signal (Sweep+BOS fallback)` }
+        const dir3 = sweepBias === 'bullish' ? 'LONG' : 'SHORT'
+        return { signal: dir3, step: 'signal', label: `${dir3} signal (Sweep+BOS fallback)` }
       }
       return { signal: null, step: 'bos', label: `${sweepBias} sweep found \u2014 waiting for 5m BOS confirmation` }
     }

@@ -64,73 +64,61 @@ const SHORT_STRATEGIES = {
   },
 }
 
-// ── LONG strategies per symbol (placeholder \u2014 to be filled in) ─────────────────
+// ── LONG strategies per symbol (mirrors SHORT, flipped bullish) ─────────────────
 
 const LONG_STRATEGIES = {
   'MES1!': {
-    name: 'Prev Day Low Sweep + Order Block Retest',
+    name: 'Sweep + BOS + IFVG Mid Retrace (Bullish Mirror)',
     rules: [
-      'Kill Zone: NY open 8:30\u20139:30 AM ET (prime time after overnight lows get swept)',
-      '1. Bias check \u2014 previous day closed bullish OR 1H uptrend (1H BOS bullish).',
-      '2. Mark previous day low + Asian session low as liquidity targets.',
-      '3. Wait for price to dip below those lows at NY open to grab stops.',
-      '4. Look for bullish market structure shift (MSS) on 5M after the sweep.',
-      '5. Find the last bearish candle before the big push up \u2014 that\u2019s the Order Block.',
-      '6. Enter long on the retest of that OB, stop below the sweep wick.',
-      '7. Target previous day\u2019s high or equal highs sitting above.',
+      'Kill Zones: London 3\u20135am ET, NY 8:30am\u201312pm ET, NY PM 1:30\u20133pm ET',
+      'Strategy A \u2014 Sweep + BOS: Prev day H/L or session H/L bullish sweep (wick below + close back above), then 5M BOS bullish confirmation (min 3 candles post-sweep). Entry on 1M FVG + IFVG retrace, or fallback to next 5M open after BOS.',
+      'Strategy B \u2014 IFVG Mid Retrace: Find 5M FVGs \u2265 7pt wide that get inversed (price closes through entire FVG). After inversion, wait for price to retrace back down to the IFVG midpoint \u2192 LONG entry.',
+      'Either strategy can trigger a trade \u2014 first signal wins.',
     ],
     risk: {
-      sl: 'Below sweep wick \u2212 3pt buffer',
-      tp: 'Previous day high or next swing high above',
+      sl: 'Sweep wick extreme + 2pt buffer (min 10pt, max 60pt)',
+      tp: 'Nearest swing high \u2265 SL \u00d7 4 distance (search window extends 30pt beyond)',
       rr: '4:1',
       units: '2 contracts',
-      cooldown: '10 min between trades',
+      cooldown: '10 min between trades, 20 min same-bias dedup',
     },
-    signals: ['Sweep+OB', 'Sweep+BOS'],
+    signals: ['Sweep+BOS', 'Sweep+BOS+1mIFVG', 'IFVG-Mid-Retrace'],
   },
 
   'MNQ1!': {
-    name: 'Silver Bullet + Equal Low Sweep + FVG Entry',
+    name: 'Sweep + BOS + IFVG Mid Retrace (Bullish Mirror)',
     rules: [
-      'Kill Zone: NY 8:30\u201310:00 AM ET (sweep window), Silver Bullet 10\u201311 AM ET (best entry)',
-      '1. Daily/4H must show bullish structure \u2014 4H BOS confirms higher highs.',
-      '2. At 8:30\u201310 AM EST, watch for price to drop and sweep below equal lows.',
-      '3. After the sweep, look for a strong bullish displacement candle closing back above.',
-      '4. Mark the bullish FVG created by that displacement.',
-      '5. Enter long when price returns to fill 50% of the FVG.',
-      '6. Stop below the liquidity sweep wick.',
-      '7. Target equal highs or previous session high above.',
+      'Kill Zones: London 3\u20135am ET, NY 8:30am\u201312pm ET, NY PM 1:30\u20133pm ET',
+      'Strategy A \u2014 Sweep + BOS: Prev day H/L or session H/L bullish sweep, then 5M BOS bullish confirmation. Entry on 1M FVG + IFVG retrace, or fallback to next 5M open after BOS.',
+      'Strategy B \u2014 IFVG Mid Retrace: Find 5M FVGs \u2265 20pt wide that get inversed. After inversion, wait for midpoint retrace \u2192 LONG entry.',
+      'Fixed SL of 35pt. Either strategy can trigger.',
     ],
     risk: {
-      sl: 'Below sweep wick \u2212 3pt buffer',
-      tp: 'Equal highs or prev session high',
+      sl: 'Fixed 35pt ($70 risk per contract)',
+      tp: 'Nearest swing high \u2265 SL \u00d7 4 distance',
       rr: '4:1',
       units: '2 contracts',
-      cooldown: '10 min between trades',
+      cooldown: '10 min between trades, 20 min same-bias dedup',
     },
-    signals: ['Sweep+Displacement+FVG', 'SilverBullet'],
+    signals: ['Sweep+BOS', 'Sweep+BOS+1mIFVG', 'IFVG-Mid-Retrace'],
   },
 
   'MGC1!': {
-    name: '4H Bullish Bias + Swing Low Sweep + FVG Entry',
+    name: 'HTF Bias + IFVG Mid Retrace (Bullish Mirror)',
     rules: [
-      'Kill Zones: London open 3\u20135 AM ET, NY open 8 AM\u2013noon ET (best when gold sweeps Asian lows)',
-      '1. Daily bias must be bullish \u2014 price making higher highs/lows on 4H.',
-      '2. Wait for price to sweep below a swing low (grab sell-side liquidity).',
-      '3. Look for a bullish displacement candle pushing back up aggressively.',
-      '4. Mark the bullish FVG or Order Block left from that move.',
-      '5. Wait for price to pull back into that zone.',
-      '6. Enter long at 50% of the FVG/OB, stop below the swept low.',
-      '7. Target the previous swing high or equal highs above.',
+      'Kill Zones: Asia open 8pm\u2013midnight ET, NY open 8am\u2013noon ET',
+      'Strategy A \u2014 HTF Bias: 4H BOS sets bullish direction, 1H BOS must agree. No open FVG on 4H or 1H blocking path to TP. Enter on 5M FVG midpoint first touch only (skip if touched > 1 time). Longs \u2265 5pt, Shorts \u2265 7pt FVG width.',
+      'Strategy B \u2014 IFVG Mid Retrace: Find 5M FVGs \u2265 3pt wide that get inversed. After inversion, wait for midpoint retrace \u2192 LONG entry.',
+      'Both strategies active \u2014 merged with aggressive dedup.',
     ],
     risk: {
-      sl: 'Below swept low wick \u2212 3pt buffer',
-      tp: 'Previous swing high or equal highs',
+      sl: 'Fixed 20pt ($200 risk per contract)',
+      tp: 'HTF: nearest 1H swing high beyond entry. IFVG: dynamic \u2265 SL \u00d7 4',
       rr: '4:1',
       units: '2 contracts',
-      cooldown: '10 min between trades',
+      cooldown: '10 min between trades, 20 min same-bias dedup',
     },
-    signals: ['Sweep+Displacement+FVG', 'HTFBias+SwingLowSweep'],
+    signals: ['HTFBias+4h/1hClean+5mFVG+MidRetrace', 'IFVG-Mid-Retrace'],
   },
 }
 

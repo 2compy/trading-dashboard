@@ -468,7 +468,6 @@ function runBacktestMGC(candles5m) {
     // Both timeframes must agree — no counter-trend trades ever
     if (bias1h !== trend4h) continue
     const bias = trend4h
-    if (bias === 'bullish') continue
 
     // ── TP at 1.5x the nearest 1h swing H/L beyond current price ──────────────
     let tpPrice = null
@@ -815,7 +814,6 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     const latestBOS = bosList[bosList.length - 1]
 
     const bias = sweepBias
-    if (bias === 'bullish') continue
 
     // Entry: try 1M FVG + IFVG, fallback to next 5m candle after BOS
     let entryCandle = null, entryPrice = null, entrySignal = 'Sweep+BOS'
@@ -1258,7 +1256,6 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     if (usedEntryTimes.has(entryCandle.time)) continue
 
     const bias       = ifvg.ifvgBias
-    if (bias === 'bullish') continue
     const entryPrice = ifvg.mid
 
     // SL: fixed per symbol, or FVG-based for ES
@@ -1445,8 +1442,10 @@ function runBacktest(candles5m, candles1m, symbol) {
   const sweepTrades = runBacktestSweepBOS(candles5m, candles1m || [], symbol, multiplier)
   const ifvgTrades  = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
 
-  // Merge and sort by entry time
-  const all = [...sweepTrades, ...ifvgTrades].sort((a, b) => a.time - b.time)
+  // Merge, filter to bearish (SHORT) only, sort by entry time
+  const all = [...sweepTrades, ...ifvgTrades]
+    .filter(t => t.bias === 'bearish')
+    .sort((a, b) => a.time - b.time)
 
   // Aggressive dedup:
   //  1. Exact same entry timestamp = duplicate (drop the second)
@@ -1727,32 +1726,32 @@ function runBacktestMomentumLong(candles5m, candles1m, symbol, multiplier) {
   return trades
 }
 
-// ── Combined backtest (long version): merge long strategies, light dedup ──────
+// ── Combined backtest (long version): mirrors SHORT strategy but keeps only bullish trades
+// Uses the SAME Sweep+BOS and IFVG Midpoint Retrace logic, just filtered to LONG
 function runBacktestLong(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
 
-  // Run all long strategies
-  const sweepTrades = runBacktestSweepBOSLong(candles5m, candles1m || [], symbol, multiplier)
-  const fvgRetraceTrades = runBacktestFVGRetraceLong(candles5m, candles1m || [], symbol, multiplier)
-  const momentumTrades = runBacktestMomentumLong(candles5m, candles1m || [], symbol, multiplier)
+  // Run the same strategies as SHORT — they now produce both directions
+  const sweepTrades = runBacktestSweepBOS(candles5m, candles1m || [], symbol, multiplier)
+  const ifvgTrades  = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
 
-  // Sort by entry time
-  const all = [...sweepTrades, ...fvgRetraceTrades, ...momentumTrades].sort((a, b) => a.time - b.time)
+  // Filter to only bullish (LONG) trades
+  const allLong = [...sweepTrades, ...ifvgTrades]
+    .filter(t => t.bias === 'bullish')
+    .sort((a, b) => a.time - b.time)
 
   // Dedup: no overlapping trades — new trade can't start until previous trade exits
   const final = []
   const usedTimes = new Set()
   let lastExitTime = 0
 
-  for (const t of all) {
+  for (const t of allLong) {
     if (usedTimes.has(t.time)) continue
-    // Skip if this trade's entry is before the last trade's exit
     if (t.time <= lastExitTime) continue
 
     t.id = final.length + 1
     final.push(t)
     usedTimes.add(t.time)
-    // Track when this trade exits so no new trade starts during it
     if (t.exitTime) lastExitTime = t.exitTime
   }
 
@@ -1778,13 +1777,14 @@ export default async function handler(req, res) {
     // Route to symbol-specific strategy
     let trades
     if (sideParam === 'long') {
-      // Long backtest
+      // Long backtest — mirrors SHORT strategy (Sweep+BOS + IFVG), filtered to bullish
       if (symbol === 'MGC1!') {
-        // MGC Long: custom strategy + FVG retrace + momentum
-        const mgcTrades = runBacktestMGCLong(candles5m)
-        const fvgTrades = runBacktestFVGRetraceLong(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
-        const momTrades = runBacktestMomentumLong(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
-        const allMGC = [...mgcTrades, ...fvgTrades, ...momTrades].sort((a, b) => a.time - b.time)
+        // MGC Long: HTF Bias (bullish) + IFVG Mid Retrace (bullish)
+        const htfTrades  = runBacktestMGC(candles5m)
+        const ifvgTrades = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
+        const allMGC = [...htfTrades, ...ifvgTrades]
+          .filter(t => t.bias === 'bullish')
+          .sort((a, b) => a.time - b.time)
         // Dedup: no overlapping trades
         trades = []
         const usedTimesL = new Set()
@@ -1807,7 +1807,9 @@ export default async function handler(req, res) {
         const htfTrades  = runBacktestMGC(candles5m)
         const ifvgTrades = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
 
-        const all = [...htfTrades, ...ifvgTrades].sort((a, b) => a.time - b.time)
+        const all = [...htfTrades, ...ifvgTrades]
+          .filter(t => t.bias === 'bearish')
+          .sort((a, b) => a.time - b.time)
         trades = []
         const usedTimes = new Set()
         for (const t of all) {
