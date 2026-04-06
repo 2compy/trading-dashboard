@@ -49,13 +49,13 @@ export default function App() {
     return () => clearInterval(interval)
   }, [])
 
-  // Fetch MTF candles for strategy on load and every 2 min
+  // Fetch MTF candles for strategy on load and every 1 min (fresher data = more signals)
   useEffect(() => {
     if (!USE_LIVE) return
     FUTURES.forEach(f => fetchMTFCandles(f.symbol))
     const interval = setInterval(() => {
       FUTURES.forEach(f => fetchMTFCandles(f.symbol))
-    }, 2 * 60 * 1000)
+    }, 60 * 1000)
     return () => clearInterval(interval)
   }, [])
 
@@ -66,17 +66,19 @@ export default function App() {
     return () => clearInterval(interval)
   }, [])
 
-  // Auto-trade every 30s when master switch is ON
+  // Auto-trade every 15s when master switch is ON (more frequent = more signal captures)
   useEffect(() => {
     if (!masterSwitch) return
-    const interval = setInterval(runAutoTrade, 30000)
+    runAutoTrade() // Check immediately on enable
+    const interval = setInterval(runAutoTrade, 15000)
     return () => clearInterval(interval)
   }, [masterSwitch])
 
-  // Paper auto-trade every 30s when paper switch is ON
+  // Paper auto-trade every 15s when paper switch is ON
   useEffect(() => {
     if (!paperSwitch) return
-    const interval = setInterval(runPaperAutoTrade, 30000)
+    runPaperAutoTrade() // Check immediately on enable
+    const interval = setInterval(runPaperAutoTrade, 15000)
     return () => clearInterval(interval)
   }, [paperSwitch])
 

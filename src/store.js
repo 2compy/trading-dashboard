@@ -315,7 +315,7 @@ export const useStore = create(
         const settings = state.tradeSettings
         const count = settings.tradeCount === 'infinite' ? 1 : parseInt(settings.tradeCount, 10) || 1
         const nowSec = Math.floor(Date.now() / 1000)
-        const COOLDOWN = 60 // 1 minute between trades per symbol
+        const COOLDOWN = 30 // 30 seconds between trades per symbol
 
         let nextId = get().nextId
         const newTrades = []
@@ -378,7 +378,7 @@ export const useStore = create(
         const settings = state.tradeSettings
         const units = settings.paperUnits || 1
         const nowSec = Math.floor(Date.now() / 1000)
-        const COOLDOWN = 60
+        const COOLDOWN = 30
 
         let nextId = state.paperNextId
         const newTrades = []

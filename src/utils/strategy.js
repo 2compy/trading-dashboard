@@ -265,7 +265,7 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     const recent5m = candles5m.slice(Math.max(0, i - 30), i + 1)
 
     if (!isKillZone(now5m.time)) continue
-    if (now5m.time - lastTradeTime < 1200) continue
+    if (now5m.time - lastTradeTime < 600) continue
 
     const pdhl = getPrevDayHL(dailyHL, now5m.time)
 
@@ -309,7 +309,6 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
     const latestBOS = bosList[bosList.length - 1]
 
     const bias = sweepBias
-    if (bias === 'bullish') continue
 
     // Entry: try 1M FVG + IFVG, fallback to next 5m candle after BOS
     let entryCandle = null, entryPrice = null, entrySignal = 'Sweep+BOS'
@@ -436,12 +435,11 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier) {
     const entryCandle = findMidRetrace(candles5m, ifvg)
     if (!entryCandle) continue
     if (!isKillZone(entryCandle.time)) continue
-    if (entryCandle.time - lastTradeTime < 1200) continue
+    if (entryCandle.time - lastTradeTime < 600) continue
     if (usedIFVGs.has(ifvg.time)) continue
     if (usedEntryTimes.has(entryCandle.time)) continue
 
     const bias       = ifvg.ifvgBias
-    if (bias === 'bullish') continue
     const entryPrice = ifvg.mid
 
     let slDist, slPrice
@@ -535,7 +533,7 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
   // Aggressive dedup:
   //  1. Exact same entry timestamp = duplicate (drop the second)
   //  2. Same bias within 20 min = same market move (drop the second)
-  //  3. Any trade within 10 min of another = too close (drop the second)
+  //  3. Any trade within 5 min of another = too close (drop the second)
   const final = []
   const usedTimes = new Set()
   for (const t of all) {
@@ -544,8 +542,8 @@ export function runBacktest(candles5m, candles1m, symbol = 'MES1!') {
     let dominated = false
     for (const prev of final) {
       const gap = t.time - prev.time
-      if (gap < 600) { dominated = true; break }
-      if (gap < 1200 && t.bias === prev.bias) { dominated = true; break }
+      if (gap < 300) { dominated = true; break }
+      if (gap < 600 && t.bias === prev.bias) { dominated = true; break }
     }
     if (dominated) continue
 
@@ -666,8 +664,9 @@ export function getSignalDebugInfo(candles5m, candles1m, symbol = 'MES1!') {
   return { signal: null, step: 'sweep', label: `No sweep (watching ${levels}) | No IFVG setups` }
 }
 
-// ── Live signal: returns 'LONG', 'SHORT', or null ───────────────────────────
+// ── Live signal: returns { direction, signal, bosTime } or null ─────────────
 // Checks BOTH strategies — first signal wins
+// Now supports LONG and SHORT for maximum trade frequency
 export function getLiveSignal(candles5m, candles1m, symbol = 'MES1!') {
   if (!candles5m?.length) return null
 
@@ -685,8 +684,12 @@ export function getLiveSignal(candles5m, candles1m, symbol = 'MES1!') {
       const latestIFVG  = ifvgs[ifvgs.length - 1]
       const entryCandle = findMidRetrace(recent5m, latestIFVG)
       if (entryCandle) {
-        if (latestIFVG.ifvgBias === 'bullish') return null
-        return 'SHORT'
+        const direction = latestIFVG.ifvgBias === 'bullish' ? 'LONG' : 'SHORT'
+        return {
+          direction,
+          signal: 'IFVG-Mid-Retrace',
+          bosTime: latestIFVG.inversionTime,
+        }
       }
     }
   }
@@ -703,6 +706,8 @@ export function getLiveSignal(candles5m, candles1m, symbol = 'MES1!') {
   if (!bosList.length) return null
   const latestBOS = bosList[bosList.length - 1]
 
+  const direction = sweepBias === 'bullish' ? 'LONG' : 'SHORT'
+
   // Try 1m IFVG entry first
   if (candles1m?.length) {
     const m1After = candles1m.filter(c => c.time >= latestBOS.time)
@@ -713,14 +718,20 @@ export function getLiveSignal(candles5m, candles1m, symbol = 'MES1!') {
         const m1PostFVG = m1After.filter(c => c.time > fvg1m.time)
         const entryCandle = findIFVGEntry(m1PostFVG, fvg1m, sweepBias)
         if (entryCandle) {
-          if (sweepBias === 'bullish') return null
-          return 'SHORT'
+          return {
+            direction,
+            signal: 'Sweep+BOS+1mIFVG',
+            bosTime: latestBOS.time,
+          }
         }
       }
     }
   }
 
   // 5M fallback: BOS confirmed = enter
-  if (sweepBias === 'bullish') return null
-  return 'SHORT'
+  return {
+    direction,
+    signal: 'Sweep+BOS',
+    bosTime: latestBOS.time,
+  }
 }
