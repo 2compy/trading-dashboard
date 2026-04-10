@@ -2018,7 +2018,7 @@ function runBacktest1mFVGTapBack(candles5m, candles1m, symbol, multiplier) {
       slPrice = entryPrice - slDist
     }
 
-    // TP: fixed override or dynamic R:R
+    // TP: fixed override or dynamic R:R with swing-level targeting
     let tpPrice
     if (bias === 'bearish') {
       const fixedTPVal = FIXED_TP[symbol]
@@ -2026,7 +2026,16 @@ function runBacktest1mFVGTapBack(candles5m, candles1m, symbol, multiplier) {
         tpPrice = entryPrice - fixedTPVal
       } else {
         const rr = SYMBOL_RR[symbol] || MIN_RR
-        tpPrice = entryPrice - slDist * rr
+        const minTPDist = slDist * rr
+        const maxTPDist = minTPDist + 30
+        // Find nearest swing low in the TP search window
+        const ei5m = candles5m.findIndex(c => c.time >= entryCandle.time)
+        const recent5m = candles5m.slice(Math.max(0, ei5m - 30), ei5m + 1)
+        const { lows } = detectSwings(recent5m, 3)
+        const targets = lows.filter(l => l.price <= entryPrice - minTPDist && l.price >= entryPrice - maxTPDist).sort((a, b) => b.price - a.price)
+        tpPrice = targets[0]?.price ?? entryPrice - minTPDist
+        const tpDistCheck = Math.abs(tpPrice - entryPrice)
+        if (tpDistCheck / slDist < rr) continue
       }
     } else {
       const fixedTPVal = LONG_FIXED_TP[symbol]
@@ -2034,7 +2043,16 @@ function runBacktest1mFVGTapBack(candles5m, candles1m, symbol, multiplier) {
         tpPrice = entryPrice + fixedTPVal
       } else {
         const rr = LONG_SYMBOL_RR[symbol] || 4
-        tpPrice = entryPrice + slDist * rr
+        const minTPDist = slDist * rr
+        const maxTPDist = minTPDist + 30
+        // Find nearest swing high in the TP search window
+        const ei5m = candles5m.findIndex(c => c.time >= entryCandle.time)
+        const recent5m = candles5m.slice(Math.max(0, ei5m - 30), ei5m + 1)
+        const { highs } = detectSwings(recent5m, 3)
+        const targets = highs.filter(h => h.price >= entryPrice + minTPDist && h.price <= entryPrice + maxTPDist).sort((a, b) => a.price - b.price)
+        tpPrice = targets[0]?.price ?? entryPrice + minTPDist
+        const tpDistCheck = Math.abs(tpPrice - entryPrice)
+        if (tpDistCheck / slDist < rr) continue
       }
     }
 
