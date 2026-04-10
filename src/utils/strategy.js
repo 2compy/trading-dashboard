@@ -274,6 +274,8 @@ const MIN_FVG_WIDTH = {
   'MGC1!': 4,
 }
 const DEFAULT_FVG_WIDTH = 5
+// Per-symbol min 1m FVG width for Strategy D (1m FVG Tap-Back)
+const MIN_1M_FVG_WIDTH = { 'MES1!': 4, 'MNQ1!': 10, 'MGC1!': 4 }
 // Per-symbol SL distance bounds
 const SL_BOUNDS = {
   'MES1!': { min: 3, max: 30 },
@@ -790,6 +792,39 @@ export function getSignalDebugInfo(candles5m, candles1m, symbol = 'MES1!') {
     return { signal: null, step: 'fvg_tapback', label: `Uptrend FVG found (${latestUFVG.width.toFixed(1)}pt) — awaiting tap-back into ${latestUFVG.bottom.toFixed(2)}–${latestUFVG.top.toFixed(2)}` }
   }
 
+  // ── Check Strategy D: 1m FVG Tap-Back (both directions) ────────────────────
+  if (candles1m?.length >= 10) {
+    const recent1m = candles1m.slice(-120)
+    const fvgs1mD = detectFVGs(recent1m).filter(f => (f.top - f.bottom) >= (MIN_1M_FVG_WIDTH[symbol] || 4))
+    if (fvgs1mD.length) {
+      const latestFVG = fvgs1mD[fvgs1mD.length - 1]
+      const fvgIdx1m = recent1m.findIndex(c => c.time >= latestFVG.time)
+      if (fvgIdx1m >= 0) {
+        const postFVG1m = recent1m.slice(fvgIdx1m + 1)
+        let movedAway = false
+        let tapBackFound = false
+        const fvgBias = latestFVG.type
+        for (const c of postFVG1m) {
+          if (fvgBias === 'bearish') {
+            if (c.high > latestFVG.top) movedAway = true
+            if (movedAway && c.low <= latestFVG.top && c.low >= latestFVG.bottom) { tapBackFound = true; break }
+          } else {
+            if (c.low < latestFVG.bottom) movedAway = true
+            if (movedAway && c.high >= latestFVG.bottom && c.high <= latestFVG.top) { tapBackFound = true; break }
+          }
+        }
+        const dir1m = fvgBias === 'bullish' ? 'LONG' : 'SHORT'
+        if (tapBackFound) {
+          return { signal: dir1m, step: 'signal', label: `${dir1m} signal — 1m FVG tap-back at ${latestFVG.mid.toFixed(2)} (${(latestFVG.top - latestFVG.bottom).toFixed(1)}pt wide)` }
+        }
+        if (movedAway) {
+          return { signal: null, step: '1m_fvg_tapback', label: `1m ${fvgBias} FVG (${(latestFVG.top - latestFVG.bottom).toFixed(1)}pt) — retrace done, awaiting tap-back into ${latestFVG.bottom.toFixed(2)}–${latestFVG.top.toFixed(2)}` }
+        }
+        return { signal: null, step: '1m_fvg_retrace', label: `1m ${fvgBias} FVG (${(latestFVG.top - latestFVG.bottom).toFixed(1)}pt) — awaiting retrace away from FVG` }
+      }
+    }
+  }
+
   // ── Check Strategy A: Sweep + BOS ──────────────────────────────────────────
   const { sweepBias, sweepTime, pdhl } = findSweep(recent5m.slice(-30), candles5m, nowTs)
 
@@ -898,6 +933,38 @@ export function getLiveSignal(candles5m, candles1m, symbol = 'MES1!') {
         direction: 'LONG',
         signal: 'Uptrend-FVG-TapBack',
         bosTime: latestUFVG.time,
+      }
+    }
+  }
+
+  // ── Strategy D: 1m FVG Tap-Back (both directions) ──────────────────────────
+  if (candles1m?.length >= 10) {
+    const recent1m = candles1m.slice(-120)
+    const fvgs1mD = detectFVGs(recent1m).filter(f => (f.top - f.bottom) >= (MIN_1M_FVG_WIDTH[symbol] || 4))
+    if (fvgs1mD.length) {
+      const latestFVG = fvgs1mD[fvgs1mD.length - 1]
+      const fvgIdx1m = recent1m.findIndex(c => c.time >= latestFVG.time)
+      if (fvgIdx1m >= 0) {
+        const postFVG1m = recent1m.slice(fvgIdx1m + 1)
+        let movedAway = false
+        let tapBackFound = false
+        const bias = latestFVG.type
+        for (const c of postFVG1m) {
+          if (bias === 'bearish') {
+            if (c.high > latestFVG.top) movedAway = true
+            if (movedAway && c.low <= latestFVG.top && c.low >= latestFVG.bottom) { tapBackFound = true; break }
+          } else {
+            if (c.low < latestFVG.bottom) movedAway = true
+            if (movedAway && c.high >= latestFVG.bottom && c.high <= latestFVG.top) { tapBackFound = true; break }
+          }
+        }
+        if (tapBackFound) {
+          return {
+            direction: bias === 'bullish' ? 'LONG' : 'SHORT',
+            signal: '1m-FVG-TapBack',
+            bosTime: latestFVG.time,
+          }
+        }
       }
     }
   }

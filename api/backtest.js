@@ -1473,12 +1473,13 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
 function runBacktest(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
 
-  // Run both strategies independently
-  const sweepTrades = runBacktestSweepBOS(candles5m, candles1m || [], symbol, multiplier)
-  const ifvgTrades  = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
+  // Run all strategies independently
+  const sweepTrades    = runBacktestSweepBOS(candles5m, candles1m || [], symbol, multiplier)
+  const ifvgTrades     = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
+  const fvg1mTrades    = runBacktest1mFVGTapBack(candles5m, candles1m || [], symbol, multiplier)
 
   // Merge, filter to bearish (SHORT) only, sort by entry time
-  const all = [...sweepTrades, ...ifvgTrades]
+  const all = [...sweepTrades, ...ifvgTrades, ...fvg1mTrades]
     .filter(t => t.bias === 'bearish')
     .sort((a, b) => a.time - b.time)
 
@@ -1916,17 +1917,182 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
   return trades
 }
 
-// ── Combined backtest (long version): Sweep+BOS + IFVG + Uptrend FVG Tap-Back
+// ══════════════════════════════════════════════════════════════════════════════
+// STRATEGY D — 1m FVG Tap-Back (Both Directions)
+//
+// The edge: Large FVGs on the 1-minute chart (≥4 units wide) represent
+// aggressive institutional moves. When price retraces away from the FVG
+// and then taps back into it, that's the institution reloading at their
+// preferred price level.
+//
+// Logic:
+//   1. Detect FVGs on 1m candles ≥ 4 units wide (bullish or bearish)
+//   2. Bearish FVG: wait for price to retrace UP past the FVG top,
+//      then tap back DOWN into the FVG zone → SHORT at FVG midpoint
+//   3. Bullish FVG: wait for price to retrace DOWN past the FVG bottom,
+//      then tap back UP into the FVG zone → LONG at FVG midpoint
+//   4. Fixed SL/TP at entry — never moves
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Min 1m FVG width per symbol — MGC = 4pt, MES = 4pt, MNQ = 10pt
+const MIN_1M_FVG_WIDTH = { 'MES1!': 4, 'MNQ1!': 10, 'MGC1!': 4 }
+
+function runBacktest1mFVGTapBack(candles5m, candles1m, symbol, multiplier) {
+  const trades = []
+  if (!candles1m || !candles1m.length) return trades
+
+  const units = UNITS[symbol] || 1
+  const minWidth = MIN_1M_FVG_WIDTH[symbol] || 4
+  let lastExitTime = 0
+  const usedFVGs = new Set()
+  const usedEntryTimes = new Set()
+
+  // Detect all 1m FVGs ≥ min width for this symbol
+  const allFVGs = detectFVGs(candles1m).filter(f => (f.top - f.bottom) >= minWidth)
+
+  for (const fvg of allFVGs) {
+    if (usedFVGs.has(fvg.time)) continue
+    if (!isKillZone(fvg.time)) continue
+
+    const fvgIdx = candles1m.findIndex(c => c.time >= fvg.time)
+    if (fvgIdx < 5 || fvgIdx >= candles1m.length - 5) continue
+
+    // Look for tap-back: price must first move AWAY from FVG, then come back
+    const postFVG = candles1m.slice(fvgIdx + 1, Math.min(fvgIdx + 120, candles1m.length))  // ~2hrs of 1m
+    if (!postFVG.length) continue
+
+    let movedAway = false
+    let entryCandle = null
+    const bias = fvg.type  // bullish FVG → long, bearish FVG → short
+
+    for (const c of postFVG) {
+      if (bias === 'bearish') {
+        // Bearish FVG: price must retrace UP past FVG top first
+        if (c.high > fvg.top) movedAway = true
+        // Then tap back DOWN into the FVG zone (high dips into or through)
+        if (movedAway && c.low <= fvg.top && c.low >= fvg.bottom) {
+          entryCandle = c
+          break
+        }
+      } else {
+        // Bullish FVG: price must retrace DOWN past FVG bottom first
+        if (c.low < fvg.bottom) movedAway = true
+        // Then tap back UP into the FVG zone (low rises into or through)
+        if (movedAway && c.high >= fvg.bottom && c.high <= fvg.top) {
+          entryCandle = c
+          break
+        }
+      }
+    }
+
+    if (!entryCandle) continue
+    if (!isKillZone(entryCandle.time)) continue
+    if (entryCandle.time <= lastExitTime) continue
+    if (usedEntryTimes.has(entryCandle.time)) continue
+
+    const entryPrice = fvg.mid
+
+    // SL: use fixed SL per symbol or FVG-based
+    let slDist, slPrice
+    if (bias === 'bearish') {
+      const fixedSLVal = FIXED_SL[symbol]
+      if (fixedSLVal != null) {
+        slDist = fixedSLVal
+      } else {
+        slDist = Math.abs(fvg.top - entryPrice) + 2  // above FVG top + buffer
+        const slB = SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
+        if (slDist < slB.min) slDist = slB.min
+        if (slDist > slB.max) continue
+      }
+      slPrice = entryPrice + slDist
+    } else {
+      const fixedSLVal = LONG_FIXED_SL[symbol]
+      if (fixedSLVal != null) {
+        slDist = fixedSLVal
+      } else {
+        slDist = Math.abs(entryPrice - fvg.bottom) + 2  // below FVG bottom + buffer
+        const slB = LONG_SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
+        if (slDist < slB.min) slDist = slB.min
+        if (slDist > slB.max) continue
+      }
+      slPrice = entryPrice - slDist
+    }
+
+    // TP: fixed override or dynamic R:R
+    let tpPrice
+    if (bias === 'bearish') {
+      const fixedTPVal = FIXED_TP[symbol]
+      if (fixedTPVal != null) {
+        tpPrice = entryPrice - fixedTPVal
+      } else {
+        const rr = SYMBOL_RR[symbol] || MIN_RR
+        tpPrice = entryPrice - slDist * rr
+      }
+    } else {
+      const fixedTPVal = LONG_FIXED_TP[symbol]
+      if (fixedTPVal != null) {
+        tpPrice = entryPrice + fixedTPVal
+      } else {
+        const rr = LONG_SYMBOL_RR[symbol] || 4
+        tpPrice = entryPrice + slDist * rr
+      }
+    }
+
+    if (bias === 'bullish' && tpPrice <= entryPrice) continue
+    if (bias === 'bearish' && tpPrice >= entryPrice) continue
+
+    const tpDist = Math.abs(tpPrice - entryPrice)
+    if (slDist === 0 || tpDist <= 0) continue
+
+    // Simulate trade on 1m candles
+    const simStart = candles1m.findIndex(c => c.time >= entryCandle.time)
+    const simCandles = candles1m.slice(simStart + 1, simStart + 500)
+
+    let simResult
+    if (bias === 'bearish') {
+      simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+    } else {
+      simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+    }
+    if (!simResult) continue
+
+    const { outcome, exitPrice, exitTime } = simResult
+    const pnlPoints = bias === 'bearish'
+      ? (outcome === 'win' ? entryPrice - exitPrice : -(exitPrice - entryPrice))
+      : (outcome === 'win' ? exitPrice - entryPrice : -(entryPrice - exitPrice))
+    const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
+
+    trades.push({
+      time: entryCandle.time, exitTime, bias,
+      entryPrice:  parseFloat(entryPrice.toFixed(4)),
+      stopPrice:   parseFloat(slPrice.toFixed(4)),
+      targetPrice: parseFloat(tpPrice.toFixed(4)),
+      exitPrice:   parseFloat(exitPrice.toFixed(4)),
+      outcome, pnlDollars, contracts: units,
+      rr: parseFloat((tpDist / slDist).toFixed(2)),
+      signal: '1m-FVG-TapBack',
+    })
+
+    usedFVGs.add(fvg.time)
+    usedEntryTimes.add(entryCandle.time)
+    lastExitTime = exitTime || entryCandle.time
+  }
+
+  return trades
+}
+
+// ── Combined backtest (long version): Sweep+BOS + IFVG + Uptrend FVG Tap-Back + 1m FVG Tap-Back
 function runBacktestLong(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
 
-  // Run all three strategies independently
-  const sweepTrades   = runBacktestSweepBOS(candles5m, candles1m || [], symbol, multiplier)
-  const ifvgTrades    = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
-  const tapBackTrades = runBacktestFVGTapBack(candles5m, candles1m || [], symbol, multiplier)
+  // Run all four strategies independently
+  const sweepTrades    = runBacktestSweepBOS(candles5m, candles1m || [], symbol, multiplier)
+  const ifvgTrades     = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
+  const tapBackTrades  = runBacktestFVGTapBack(candles5m, candles1m || [], symbol, multiplier)
+  const fvg1mTrades    = runBacktest1mFVGTapBack(candles5m, candles1m || [], symbol, multiplier)
 
   // Filter to only bullish (LONG) trades
-  const allLong = [...sweepTrades, ...ifvgTrades, ...tapBackTrades]
+  const allLong = [...sweepTrades, ...ifvgTrades, ...tapBackTrades, ...fvg1mTrades]
     .filter(t => t.bias === 'bullish')
     .sort((a, b) => a.time - b.time)
 
@@ -1969,11 +2135,12 @@ export default async function handler(req, res) {
     if (sideParam === 'long') {
       // Long backtest — mirrors SHORT strategy (Sweep+BOS + IFVG), filtered to bullish
       if (symbol === 'MGC1!') {
-        // MGC Long: HTF Bias (bullish) + IFVG Mid Retrace (bullish) + Uptrend FVG Tap-Back
+        // MGC Long: HTF Bias + IFVG Mid + Uptrend FVG Tap-Back + 1m FVG Tap-Back
         const htfTrades     = runBacktestMGC(candles5m)
         const ifvgTrades    = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
         const tapBackTrades = runBacktestFVGTapBack(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
-        const allMGC = [...htfTrades, ...ifvgTrades, ...tapBackTrades]
+        const fvg1mTrades   = runBacktest1mFVGTapBack(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
+        const allMGC = [...htfTrades, ...ifvgTrades, ...tapBackTrades, ...fvg1mTrades]
           .filter(t => t.bias === 'bullish')
           .sort((a, b) => a.time - b.time)
         // Dedup: no overlapping trades
@@ -1994,11 +2161,12 @@ export default async function handler(req, res) {
     } else {
       // Short backtest (default)
       if (symbol === 'MGC1!') {
-        // MGC: HTF Bias + IFVG Mid Retrace, merged with dedup
-        const htfTrades  = runBacktestMGC(candles5m)
-        const ifvgTrades = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
+        // MGC: HTF Bias + IFVG Mid Retrace + 1m FVG Tap-Back, merged with dedup
+        const htfTrades   = runBacktestMGC(candles5m)
+        const ifvgTrades  = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
+        const fvg1mTrades = runBacktest1mFVGTapBack(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
 
-        const all = [...htfTrades, ...ifvgTrades]
+        const all = [...htfTrades, ...ifvgTrades, ...fvg1mTrades]
           .filter(t => t.bias === 'bearish')
           .sort((a, b) => a.time - b.time)
         trades = []
