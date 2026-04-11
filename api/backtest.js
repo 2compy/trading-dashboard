@@ -4,16 +4,105 @@
 //   Others → Daily H/L Sweep + BOS (after sweep) + 5m entry
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { readFileSync, existsSync } from 'fs'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname  = dirname(__filename)
+
 const SYMBOL_MAP = {
   'MES1!': 'MES=F',
   'MNQ1!': 'MNQ=F',
   'MGC1!': 'MGC=F',
 }
 
+// Map symbols to CSV filenames in the data/ folder
+const CSV_FILES = {
+  'MES1!': 'MES1_5m.csv',
+  'MNQ1!': 'MNQ1_5m.csv',
+  'MGC1!': 'MGC1_5m.csv',
+}
+
 const CONTRACT_MULTIPLIER = { 'MES1!': 5, 'MNQ1!': 2, 'MGC1!': 10 }
 // Units (contracts) per trade per symbol
 const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
 const MIN_RR = 4
+
+// ── CSV Import (TradingView data) ────────────────────────────────────────────
+function loadCSVCandles(symbol) {
+  const csvFile = CSV_FILES[symbol]
+  if (!csvFile) return []
+
+  // Try multiple possible paths (local dev vs Vercel deployment)
+  const possiblePaths = [
+    join(__dirname, '..', 'data', csvFile),
+    join(process.cwd(), 'data', csvFile),
+  ]
+
+  for (const csvPath of possiblePaths) {
+    if (!existsSync(csvPath)) continue
+    try {
+      const raw = readFileSync(csvPath, 'utf-8')
+      const lines = raw.trim().split('\n')
+      const candles = []
+      for (let i = 1; i < lines.length; i++) {
+        const parts = lines[i].split(',')
+        if (parts.length < 5) continue
+        const time  = parseInt(parts[0], 10)
+        const open  = parseFloat(parts[1])
+        const high  = parseFloat(parts[2])
+        const low   = parseFloat(parts[3])
+        const close = parseFloat(parts[4])
+        if (isNaN(time) || isNaN(close)) continue
+        candles.push({ time, open, high, low, close })
+      }
+      console.log(`[CSV] Loaded ${candles.length} candles for ${symbol} from ${csvPath}`)
+      return candles
+    } catch (e) {
+      console.warn(`[CSV] Failed to read ${csvPath}:`, e.message)
+    }
+  }
+  return []
+}
+
+// Merge CSV historical data with Yahoo Finance recent data (deduped, sorted)
+function mergeCandles(csvCandles, yahooCandles) {
+  const merged = [...csvCandles, ...yahooCandles]
+  const seen = new Set()
+  return merged
+    .filter(c => { if (seen.has(c.time)) return false; seen.add(c.time); return true })
+    .sort((a, b) => a.time - b.time)
+}
+
+// Generate synthetic 1m candles from 5m candles (for Strategy D when real 1m unavailable)
+function synthesize1mFrom5m(candles5m) {
+  const result = []
+  for (const c of candles5m) {
+    // Split each 5m candle into 5 synthetic 1m candles
+    // Distribute the price movement across 5 intervals
+    const range = c.high - c.low
+    const isUp = c.close >= c.open
+    for (let j = 0; j < 5; j++) {
+      const t = c.time + j * 60
+      let o, h, l, cl
+      if (j === 0) {
+        o = c.open; h = isUp ? c.open + range * 0.3 : c.open; l = isUp ? c.open : c.open - range * 0.3; cl = isUp ? o + range * 0.2 : o - range * 0.2
+      } else if (j === 4) {
+        o = result.length ? result[result.length - 1].close : c.open; cl = c.close; h = Math.max(o, cl, isUp ? c.high : cl); l = Math.min(o, cl, isUp ? cl : c.low)
+      } else {
+        const frac = j / 4
+        o = result.length ? result[result.length - 1].close : c.open
+        cl = isUp ? c.open + (c.close - c.open) * frac : c.open + (c.close - c.open) * frac
+        h = Math.max(o, cl) + range * 0.05; l = Math.min(o, cl) - range * 0.05
+      }
+      // Clamp to parent candle bounds
+      h = Math.min(h, c.high); l = Math.max(l, c.low)
+      result.push({ time: t, open: parseFloat(o.toFixed(4)), high: parseFloat(h.toFixed(4)), low: parseFloat(l.toFixed(4)), close: parseFloat(cl.toFixed(4)) })
+    }
+  }
+  return result
+}
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
 async function fetch5mChunked(ticker) {
@@ -2143,10 +2232,21 @@ export default async function handler(req, res) {
   if (!ticker) return res.status(400).json({ error: `Unknown symbol: ${symbol}` })
 
   try {
-    const [candles5m, candles1m] = await Promise.all([
+    // Load CSV historical data + Yahoo Finance recent data, merge them
+    const sym = symbol?.toUpperCase() || symbol
+    const csvCandles = loadCSVCandles(sym)
+    const [yahoo5m, yahoo1m] = await Promise.all([
       fetch5mChunked(ticker),
       fetch1mRecent(ticker),
     ])
+    const candles5m = mergeCandles(csvCandles, yahoo5m)
+
+    // For 1m data: use Yahoo 1m where available, synthesize from CSV 5m for older data
+    // Only synthesize for the CSV date range that Yahoo 1m doesn't cover
+    const yahoo1mStart = yahoo1m.length ? yahoo1m[0].time : Infinity
+    const olderCSV = csvCandles.filter(c => c.time < yahoo1mStart)
+    const synthetic1m = olderCSV.length ? synthesize1mFrom5m(olderCSV) : []
+    const candles1m = mergeCandles(synthetic1m, yahoo1m)
 
     // Route to symbol-specific strategy
     let trades
@@ -2210,7 +2310,8 @@ export default async function handler(req, res) {
 
     const earliest = candles5m.length ? new Date(candles5m[0].time * 1000).toISOString().split('T')[0] : null
     const latest   = candles5m.length ? new Date(candles5m[candles5m.length - 1].time * 1000).toISOString().split('T')[0] : null
-    const dataNote = `5m: ${earliest} → ${latest} | 1m: Yahoo 7d (${candles1m.length} candles)`
+    const csvCount = csvCandles.length
+    const dataNote = `5m: ${earliest} → ${latest} (${candles5m.length} candles${csvCount ? `, ${csvCount} from CSV` : ''}) | 1m: ${candles1m.length} candles${synthetic1m.length ? ` (${synthetic1m.length} synthetic)` : ''}`
 
     res.setHeader('Cache-Control', 's-maxage=60')
     return res.status(200).json({
