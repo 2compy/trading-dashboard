@@ -347,11 +347,11 @@ const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
 // ── Min FVG width for IFVG detection, per symbol ────────────────────────────
 // MGC ~3100 → 3pt, MES ~5500 → 7pt, MNQ ~19000 → 20pt, Silver ~32 → 0.10
 const MIN_FVG_WIDTH = {
-  'MES1!': 5,
-  'MNQ1!': 16,
-  'MGC1!': 4,
+  'MES1!': 10,
+  'MNQ1!': 30,
+  'MGC1!': 8,
 }
-const DEFAULT_FVG_WIDTH = 5
+const DEFAULT_FVG_WIDTH = 10
 // ── SL distance bounds per symbol ───────────────────────────────────────────
 const SL_BOUNDS = {
   'MES1!': { min: 3, max: 30 },
@@ -658,7 +658,7 @@ function runBacktestMGC(candles5m) {
     if (hasFVGBlocking(recent1h, now5m.close, tpPrice)) continue
 
     // ── 5m FVG: longs need 5pts wide, shorts need 7pts wide ─────────────────
-    const minFVGWidth = bias === 'bearish' ? 7 : 5
+    const minFVGWidth = MIN_FVG_WIDTH['MGC1!'] || 8
     const fvgs5m = detectFVGs(recent5m).filter(f => f.type === bias && f.top - f.bottom >= minFVGWidth)
     if (!fvgs5m.length) continue
     const fvg5m = fvgs5m[fvgs5m.length - 1]
@@ -2123,9 +2123,10 @@ function runBacktest(candles5m, candles1m, symbol) {
   const ifvgTrades     = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
   const liqSweepTrades = runBacktestLiqSweepFVG(candles5m, candles1m || [], symbol, multiplier)
   const obTrades       = runBacktestOrderBlock(candles5m, candles1m || [], symbol, multiplier)
+  const fvgRetraceShort = runBacktestFVGRetraceShort(candles5m, candles1m || [], symbol, multiplier)
 
   // Merge, filter to bearish (SHORT) only, sort by entry time
-  const all = [...ifvgTrades, ...liqSweepTrades, ...obTrades]
+  const all = [...ifvgTrades, ...liqSweepTrades, ...obTrades, ...fvgRetraceShort]
     .filter(t => t.bias === 'bearish')
     .sort((a, b) => a.time - b.time)
 
@@ -2172,8 +2173,9 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
   let lastExitTime = 0
   const usedFVGs = new Set()
 
-  // Pre-detect ALL bullish FVGs ≥ 4pt wide
-  const allFVGs = detectFVGs(candles5m).filter(f => f.type === 'bullish' && (f.top - f.bottom) >= 4)
+  // Pre-detect ALL bullish FVGs ≥ min width for symbol
+  const fvgMinW = MIN_FVG_WIDTH[symbol] || DEFAULT_FVG_WIDTH
+  const allFVGs = detectFVGs(candles5m).filter(f => f.type === 'bullish' && (f.top - f.bottom) >= fvgMinW)
 
   for (const fvg of allFVGs) {
     if (usedFVGs.has(fvg.time)) continue
@@ -2314,6 +2316,187 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
       contracts: units,
       rr: parseFloat((finalTPDist / slDist).toFixed(2)),
       signal: 'FVG-Retrace-Long',
+    })
+
+    usedFVGs.add(fvg.time)
+    lastExitTime = exitTime || entryCandle.time
+  }
+
+  return trades
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FVG RETRACE SHORT — ICT Displacement + FVG Premium Entry (Downtrend mirror)
+//
+// The edge: Displacement candles (big body bearish candles) show smart money
+// selling aggressively. The FVG left behind is the "premium zone" where
+// institutions want to reload shorts. When price retraces to this zone, we
+// enter short with momentum already confirmed in our direction.
+//
+// Confluences (mirrors the long version):
+//   1. Bearish displacement (large body candle or 2+ consecutive red candles)
+//   2. Bearish FVG created by the displacement (≥3pt gap)
+//   3. Price retraces into FVG zone (wicks into or near it)
+//   4. Entry on rejection (bearish candle at FVG zone)
+//   5. SL above FVG with ATR-based buffer
+//   6. TP at displacement low or nearest swing low (price already went there)
+// ══════════════════════════════════════════════════════════════════════════════
+function capShortSL(entryPrice, rawSLPrice, symbol) {
+  const maxSLDist = FIXED_SL[symbol] || 20
+  const rawDist = rawSLPrice - entryPrice
+  if (rawDist > maxSLDist) return entryPrice + maxSLDist
+  return rawSLPrice
+}
+
+function runBacktestFVGRetraceShort(candles5m, candles1m, symbol, multiplier) {
+  const trades = []
+  if (!candles5m.length) return trades
+
+  const units = UNITS[symbol] || 1
+  let lastExitTime = 0
+  const usedFVGs = new Set()
+
+  // Pre-detect ALL bearish FVGs ≥ min width for symbol
+  const fvgMinW = MIN_FVG_WIDTH[symbol] || DEFAULT_FVG_WIDTH
+  const allFVGs = detectFVGs(candles5m).filter(f => f.type === 'bearish' && (f.top - f.bottom) >= fvgMinW)
+
+  for (const fvg of allFVGs) {
+    if (usedFVGs.has(fvg.time)) continue
+
+    const fvgIdx = candles5m.findIndex(c => c.time >= fvg.time)
+    if (fvgIdx < 15 || fvgIdx >= candles5m.length - 5) continue
+
+    // Kill zone: 7:00 AM – 3:00 PM ET
+    const fvgMins = getETMinutes(fvg.time)
+    if (!(fvgMins >= 420 && fvgMins < 900)) continue
+
+    // ── EMA trend filter ─────────────────────────────────────────────────────
+    const emaSliceFRS = candles5m.slice(Math.max(0, fvgIdx - EMA_HTF_PERIOD), fvgIdx + 1)
+    if (!trendAligned(emaSliceFRS, 'bearish')) continue
+    if (!htfTrendAligned(emaSliceFRS, 'bearish')) continue
+
+    // ── CONFLUENCE 1: Displacement confirmation ──────────────────────────────
+    // The candles around the FVG must show bearish displacement:
+    //   - The FVG candle itself is bearish with body ≥ 30% of range, OR
+    //   - 2 of the 3 candles around FVG are bearish
+    const fvgCandle = candles5m[fvgIdx]
+    const nearby3 = candles5m.slice(Math.max(0, fvgIdx - 1), fvgIdx + 2)
+    const bearishCount = nearby3.filter(c => c.close < c.open).length
+    const fvgBody = Math.abs(fvgCandle.close - fvgCandle.open)
+    const fvgRange = fvgCandle.high - fvgCandle.low
+    const hasDisp = (fvgCandle.close < fvgCandle.open && fvgRange > 0 && fvgBody / fvgRange >= 0.30) || bearishCount >= 2
+    if (!hasDisp) continue
+
+    // ── CONFLUENCE 2: Price context — recent price action trending down ──────
+    // Simple: close of FVG candle < close from 5 candles ago
+    const lb = Math.max(0, fvgIdx - 5)
+    if (fvgCandle.close >= candles5m[lb].close) continue
+
+    // ATR for dynamic SL sizing
+    const atr = getAvgRange(candles5m.slice(Math.max(0, fvgIdx - 14), fvgIdx + 1))
+
+    // ── CONFLUENCE 3: Price must DROP below FVG bottom first (confirms gap) ──
+    // Then retrace back into the FVG zone for entry
+    const postFVG = candles5m.slice(fvgIdx + 1, Math.min(fvgIdx + 80, candles5m.length))
+    let entryCandle = null
+    let displacementLow = fvgCandle.low  // lowest point of displacement move
+    let fvgConfirmed = false  // price must trade below FVG bottom first
+
+    for (let k = 0; k < postFVG.length; k++) {
+      const c = postFVG[k]
+      if (c.low < displacementLow) displacementLow = c.low
+
+      // FVG invalidated if candle closes above top by more than 1 ATR
+      if (c.close > fvg.top + atr) break
+
+      // Step 1: Price must push BELOW the FVG bottom (confirming gap is respected)
+      if (!fvgConfirmed) {
+        if (c.close < fvg.bottom && c.low < fvg.bottom - 2) {
+          fvgConfirmed = true
+        }
+        continue
+      }
+
+      // Step 2: After confirming lower, price retraces BACK into FVG zone
+      if (c.high >= fvg.bottom - 1 && c.high <= fvg.top + 1) {
+        // Accept if this candle closes bearish (rejection off FVG)
+        if (c.close < c.open && c.close < fvg.top) {
+          entryCandle = c; break
+        }
+        // Or next candle closes bearish
+        if (k + 1 < postFVG.length) {
+          const n = postFVG[k + 1]
+          if (n.close < n.open && n.close < fvg.top) { entryCandle = n; break }
+        }
+        // Or 2 candles later
+        if (k + 2 < postFVG.length) {
+          const n = postFVG[k + 2]
+          if (n.close < n.open && n.close < fvg.top) { entryCandle = n; break }
+        }
+      }
+    }
+    if (!entryCandle) continue
+    if (entryCandle.time <= lastExitTime) continue
+
+    // ── ENTRY ────────────────────────────────────────────────────────────────
+    const entryPrice = entryCandle.close
+
+    // ── SL: above FVG with ATR-based buffer, capped per symbol ──────────────
+    const slBuffer = Math.max(3, atr * 0.8)
+    const slPrice = capShortSL(entryPrice, fvg.top + slBuffer, symbol)
+
+    // ── TP: displacement low (price already went there once) ────────────────
+    let tpPrice = displacementLow
+
+    // Also consider nearest swing low if it's closer
+    const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
+    const lookback = candles5m.slice(Math.max(0, entryIdx - 40), entryIdx + 1)
+    const { lows: swL } = detectSwings(lookback, 2)
+    const nearestLow = swL.filter(l => l.price < entryPrice).sort((a, b) => b.price - a.price)[0]
+    if (nearestLow && nearestLow.price > tpPrice && nearestLow.price < entryPrice) {
+      tpPrice = nearestLow.price
+    }
+
+    if (tpPrice >= entryPrice) continue
+
+    const slDist = Math.abs(slPrice - entryPrice)
+    const tpDist = Math.abs(entryPrice - tpPrice)
+    if (slDist <= 0 || tpDist <= 0) continue
+    if (tpDist / slDist > 16) continue
+
+    // Fixed TP override or dynamic R:R floor
+    const fvgFixedTP = FIXED_TP[symbol]
+    if (fvgFixedTP != null) {
+      tpPrice = entryPrice - fvgFixedTP
+    } else {
+      const fvgMinRR = SYMBOL_RR[symbol] || 4
+      if (tpDist / slDist < fvgMinRR) tpPrice = entryPrice - slDist * fvgMinRR
+    }
+
+    const finalTPDist = Math.abs(entryPrice - tpPrice)
+
+    // ── SIMULATE ─────────────────────────────────────────────────────────────
+    const ei1m = candles1m.findIndex(c => c.time >= entryCandle.time)
+    const fut1m = candles1m.slice(ei1m + 1, ei1m + 500)
+    const ei5m = candles5m.findIndex(c => c.time >= entryCandle.time)
+    const simCandles = fut1m.length > 0 ? fut1m : candles5m.slice(ei5m + 1, ei5m + 250)
+
+    const simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+    if (!simResult) continue
+
+    const { outcome, exitPrice, exitTime } = simResult
+    const actualPnl = (entryPrice - exitPrice) * multiplier * units
+
+    trades.push({
+      time: entryCandle.time, exitTime, bias: 'bearish',
+      entryPrice:  parseFloat(entryPrice.toFixed(4)),
+      stopPrice:   parseFloat(slPrice.toFixed(4)),
+      targetPrice: parseFloat(tpPrice.toFixed(4)),
+      exitPrice:   parseFloat(exitPrice.toFixed(4)),
+      outcome, pnlDollars: parseFloat(actualPnl.toFixed(2)),
+      contracts: units,
+      rr: parseFloat((finalTPDist / slDist).toFixed(2)),
+      signal: 'FVG-Retrace-Short',
     })
 
     usedFVGs.add(fvg.time)
@@ -2857,13 +3040,14 @@ export default async function handler(req, res) {
     } else {
       // Short backtest (default)
       if (symbol === 'MGC1!') {
-        // MGC: HTF Bias + IFVG Mid Retrace + LiqSweep+FVG + OrderBlock, merged with dedup
+        // MGC: HTF Bias + IFVG Mid + LiqSweep + OrderBlock + FVG-Retrace-Short, merged with dedup
         const htfTrades   = runBacktestMGC(candles5m)
         const ifvgTrades  = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
         const liqSweepTrades = runBacktestLiqSweepFVG(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
         const obTrades    = runBacktestOrderBlock(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
+        const fvgRetShort = runBacktestFVGRetraceShort(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
 
-        const all = [...htfTrades, ...ifvgTrades, ...liqSweepTrades, ...obTrades]
+        const all = [...htfTrades, ...ifvgTrades, ...liqSweepTrades, ...obTrades, ...fvgRetShort]
           .filter(t => t.bias === 'bearish')
           .sort((a, b) => a.time - b.time)
         trades = []
