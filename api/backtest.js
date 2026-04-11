@@ -2116,18 +2116,247 @@ function runBacktestOrderBlock(candles5m, candles1m, symbol, multiplier, killZon
   return trades
 }
 
-// ── Combined backtest: merge both strategies, dedup aggressively ─────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// BREAKER BLOCK — Failed Structure Flip Entry
+//
+// The edge: A "breaker block" forms when a swing level (support/resistance)
+// is broken decisively. The last candle that defended the old level becomes
+// the breaker — it flips from support to resistance (bearish) or resistance
+// to support (bullish). When price retests this flipped level, trapped
+// traders on the wrong side provide liquidity for our entry.
+//
+// Bearish breaker: swing low support breaks → old support becomes resistance
+//   1. Identify a swing low that held as support (2+ bounces or strong reaction)
+//   2. Price breaks BELOW the swing low decisively (close below)
+//   3. The last bullish candle before the break = breaker block
+//   4. Wait for price to retrace UP to the breaker zone
+//   5. Enter short on rejection at the breaker level
+//
+// Bullish breaker: swing high resistance breaks → old resistance becomes support
+//   1. Identify a swing high that held as resistance
+//   2. Price breaks ABOVE the swing high decisively (close above)
+//   3. The last bearish candle before the break = breaker block
+//   4. Wait for price to retrace DOWN to the breaker zone
+//   5. Enter long on rejection at the breaker level
+//
+// Same rules: fixed SL, R:R based TP, dual EMA, kill zones, no overlap
+// ══════════════════════════════════════════════════════════════════════════════
+function runBacktestBreakerBlock(candles5m, candles1m, symbol, multiplier, killZoneFn = isKillZone) {
+  const trades = []
+  if (!candles5m.length) return trades
+
+  const units = UNITS[symbol] || 1
+  let lastExitTime = 0
+  const usedBreakerTimes = new Set()
+  const usedEntryTimes = new Set()
+
+  const { highs: swingHighs, lows: swingLows } = detectSwings(candles5m, 3)
+  for (let i = 30; i < candles5m.length - 5; i++) {
+    const c = candles5m[i]
+    if (!killZoneFn(c.time)) continue
+    if (c.time <= lastExitTime) continue
+
+    const emaSlice = candles5m.slice(Math.max(0, i - EMA_HTF_PERIOD), i + 1)
+
+    // ── BEARISH BREAKER: swing low breaks → enter short on retest ────────────
+    // Find a recent swing low that just got broken (current candle closes below it)
+    const recentSwingLow = swingLows.filter(l =>
+      l.time < c.time && c.time - l.time < 50 * 300 && c.time - l.time > 5 * 300
+    ).pop()
+
+    if (recentSwingLow && !usedBreakerTimes.has(recentSwingLow.time)) {
+      // Break condition: candle closes decisively below the swing low
+      const prevCandle = candles5m[i - 1]
+      if (prevCandle.close >= recentSwingLow.price && c.close < recentSwingLow.price - 1) {
+        // EMA must confirm bearish
+        if (trendAligned(emaSlice, 'bearish') && htfTrendAligned(emaSlice, 'bearish')) {
+          // Breaker block = last bullish candle before the break
+          let breakerCandle = null
+          for (let j = i - 1; j >= Math.max(0, i - 10); j--) {
+            if (candles5m[j].close > candles5m[j].open) {
+              breakerCandle = candles5m[j]
+              break
+            }
+          }
+          if (!breakerCandle) continue
+
+          // Breaker zone = from breaker candle open to high
+          const bkTop = breakerCandle.high
+          const bkBottom = breakerCandle.open
+          const bkMid = (bkTop + bkBottom) / 2
+
+          // Wait for retrace UP into breaker zone
+          const postBreak = candles5m.slice(i + 1, Math.min(i + 40, candles5m.length))
+          let entryCandle = null
+          for (let k = 0; k < postBreak.length; k++) {
+            const rc = postBreak[k]
+            if (rc.high >= bkBottom && rc.high <= bkTop + (bkTop - bkBottom) * 0.5) {
+              // Rejection: closes below breaker midpoint
+              if (rc.close < bkMid) { entryCandle = rc; break }
+              if (k + 1 < postBreak.length && postBreak[k + 1].close < bkMid) {
+                entryCandle = postBreak[k + 1]; break
+              }
+            }
+          }
+
+          if (entryCandle && !usedEntryTimes.has(entryCandle.time) && entryCandle.time > lastExitTime) {
+            const entryPrice = bkMid
+
+            let slDist
+            const fixedSL = FIXED_SL[symbol]
+            if (fixedSL != null) { slDist = fixedSL }
+            else {
+              slDist = Math.abs(bkTop - entryPrice) + 3
+              const slBounds = SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
+              if (slDist < slBounds.min || slDist > slBounds.max) continue
+            }
+            const slPrice = entryPrice + slDist
+
+            const rr = SYMBOL_RR[symbol] || MIN_RR
+            let tpPrice
+            const fixedTPVal = FIXED_TP[symbol]
+            if (fixedTPVal != null) { tpPrice = entryPrice - fixedTPVal }
+            else { tpPrice = entryPrice - slDist * rr }
+            if (tpPrice >= entryPrice) continue
+
+            const tpDist = Math.abs(entryPrice - tpPrice)
+
+            const entryIdx = candles5m.findIndex(x => x.time >= entryCandle.time)
+            const entryIdx1m = candles1m?.length ? candles1m.findIndex(x => x.time >= entryCandle.time) : -1
+            const simCandles = entryIdx1m >= 0 && entryIdx1m < candles1m.length - 1
+              ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
+              : candles5m.slice(entryIdx + 1, entryIdx + 200)
+
+            const simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
+            if (!simResult) continue
+
+            const { outcome, exitPrice: simExit, exitTime } = simResult
+            const pnlPoints = outcome === 'win' ? entryPrice - simExit : -(simExit - entryPrice)
+            const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
+
+            trades.push({
+              id: trades.length + 1, time: entryCandle.time, exitTime, bias: 'bearish',
+              entryPrice: parseFloat(entryPrice.toFixed(4)),
+              stopPrice: parseFloat(slPrice.toFixed(4)),
+              targetPrice: parseFloat(tpPrice.toFixed(4)),
+              exitPrice: parseFloat(simExit.toFixed(4)),
+              outcome, pnlDollars, rr: parseFloat((tpDist / slDist).toFixed(2)),
+              contracts: units, signal: 'Breaker-Block',
+            })
+
+            usedBreakerTimes.add(recentSwingLow.time)
+            usedEntryTimes.add(entryCandle.time)
+            lastExitTime = exitTime || entryCandle.time
+          }
+        }
+      }
+    }
+
+    // ── BULLISH BREAKER: swing high breaks → enter long on retest ────────────
+    const recentSwingHigh = swingHighs.filter(h =>
+      h.time < c.time && c.time - h.time < 50 * 300 && c.time - h.time > 5 * 300
+    ).pop()
+
+    if (recentSwingHigh && !usedBreakerTimes.has(recentSwingHigh.time)) {
+      const prevCandle = candles5m[i - 1]
+      if (prevCandle.close <= recentSwingHigh.price && c.close > recentSwingHigh.price + 1) {
+        if (trendAligned(emaSlice, 'bullish') && htfTrendAligned(emaSlice, 'bullish')) {
+          // Breaker block = last bearish candle before the break
+          let breakerCandle = null
+          for (let j = i - 1; j >= Math.max(0, i - 10); j--) {
+            if (candles5m[j].close < candles5m[j].open) {
+              breakerCandle = candles5m[j]
+              break
+            }
+          }
+          if (!breakerCandle) continue
+
+          const bkTop = breakerCandle.open  // bearish candle: open is higher
+          const bkBottom = breakerCandle.low
+          const bkMid = (bkTop + bkBottom) / 2
+
+          // Wait for retrace DOWN into breaker zone
+          const postBreak = candles5m.slice(i + 1, Math.min(i + 40, candles5m.length))
+          let entryCandle = null
+          for (let k = 0; k < postBreak.length; k++) {
+            const rc = postBreak[k]
+            if (rc.low <= bkTop && rc.low >= bkBottom - (bkTop - bkBottom) * 0.5) {
+              if (rc.close > bkMid) { entryCandle = rc; break }
+              if (k + 1 < postBreak.length && postBreak[k + 1].close > bkMid) {
+                entryCandle = postBreak[k + 1]; break
+              }
+            }
+          }
+
+          if (entryCandle && !usedEntryTimes.has(entryCandle.time) && entryCandle.time > lastExitTime) {
+            const entryPrice = bkMid
+
+            let slDist
+            const fixedSLLong = LONG_FIXED_SL[symbol]
+            if (fixedSLLong != null) { slDist = fixedSLLong }
+            else {
+              slDist = Math.abs(entryPrice - bkBottom) + 3
+              const slBounds = LONG_SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
+              if (slDist < slBounds.min || slDist > slBounds.max) continue
+            }
+            const slPrice = entryPrice - slDist
+
+            const rr = LONG_SYMBOL_RR[symbol] || MIN_RR
+            let tpPrice
+            const fixedTPVal = LONG_FIXED_TP[symbol]
+            if (fixedTPVal != null) { tpPrice = entryPrice + fixedTPVal }
+            else { tpPrice = entryPrice + slDist * rr }
+            if (tpPrice <= entryPrice) continue
+
+            const tpDist = Math.abs(tpPrice - entryPrice)
+
+            const entryIdx = candles5m.findIndex(x => x.time >= entryCandle.time)
+            const entryIdx1m = candles1m?.length ? candles1m.findIndex(x => x.time >= entryCandle.time) : -1
+            const simCandles = entryIdx1m >= 0 && entryIdx1m < candles1m.length - 1
+              ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
+              : candles5m.slice(entryIdx + 1, entryIdx + 200)
+
+            const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
+            if (!simResult) continue
+
+            const { outcome, exitPrice: simExit, exitTime } = simResult
+            const pnlPoints = outcome === 'win' ? simExit - entryPrice : -(entryPrice - simExit)
+            const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
+
+            trades.push({
+              id: trades.length + 1, time: entryCandle.time, exitTime, bias: 'bullish',
+              entryPrice: parseFloat(entryPrice.toFixed(4)),
+              stopPrice: parseFloat(slPrice.toFixed(4)),
+              targetPrice: parseFloat(tpPrice.toFixed(4)),
+              exitPrice: parseFloat(simExit.toFixed(4)),
+              outcome, pnlDollars, rr: parseFloat((tpDist / slDist).toFixed(2)),
+              contracts: units, signal: 'Breaker-Block',
+            })
+
+            usedBreakerTimes.add(recentSwingHigh.time)
+            usedEntryTimes.add(entryCandle.time)
+            lastExitTime = exitTime || entryCandle.time
+          }
+        }
+      }
+    }
+  }
+
+  return trades
+}
+
+// ── Combined backtest: merge all strategies, dedup aggressively ──────────────
 function runBacktest(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
 
-  // Run highest-WR strategies only (removed: Sweep+BOS, 1m-FVG-TapBack)
   const ifvgTrades     = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
   const liqSweepTrades = runBacktestLiqSweepFVG(candles5m, candles1m || [], symbol, multiplier)
   const obTrades       = runBacktestOrderBlock(candles5m, candles1m || [], symbol, multiplier)
   const fvgRetraceShort = runBacktestFVGRetraceShort(candles5m, candles1m || [], symbol, multiplier)
+  const breakerTrades  = runBacktestBreakerBlock(candles5m, candles1m || [], symbol, multiplier)
 
   // Merge, filter to bearish (SHORT) only, sort by entry time
-  const all = [...ifvgTrades, ...liqSweepTrades, ...obTrades, ...fvgRetraceShort]
+  const all = [...ifvgTrades, ...liqSweepTrades, ...obTrades, ...fvgRetraceShort, ...breakerTrades]
     .filter(t => t.bias === 'bearish')
     .sort((a, b) => a.time - b.time)
 
