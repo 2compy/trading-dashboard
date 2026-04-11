@@ -457,9 +457,10 @@ function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
 
-    // Max duration — force close
+    // Max duration — force close (win if profitable, loss if not)
     if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
-      return { outcome: 'loss', exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout' }
+      const outcome = fc.close < entryPrice ? 'win' : 'loss'
+      return { outcome, exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout' }
     }
 
     // SL hit (price goes UP to hit short SL) — SL stays fixed
@@ -467,7 +468,7 @@ function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles
       return { outcome: 'loss', exitPrice: slPrice, exitTime: fc.time, exitReason: 'sl' }
     }
 
-    // TP hit (price goes DOWN to hit short TP) — ONLY way to win
+    // TP hit (price goes DOWN to hit short TP)
     if (fc.low <= tpPrice) {
       return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time, exitReason: 'tp' }
     }
@@ -475,7 +476,8 @@ function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles
 
   if (simCandles.length > 0) {
     const lastCandle = simCandles[Math.min(simCandles.length - 1, maxCandles - 1)]
-    return { outcome: 'loss', exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit' }
+    const outcome = lastCandle.close < entryPrice ? 'win' : 'loss'
+    return { outcome, exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit' }
   }
   return null
 }
@@ -488,9 +490,10 @@ function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles 
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
 
-    // Max duration — force close
+    // Max duration — force close (win if profitable, loss if not)
     if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
-      return { outcome: 'loss', exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout' }
+      const outcome = fc.close > entryPrice ? 'win' : 'loss'
+      return { outcome, exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout' }
     }
 
     // SL hit (price goes DOWN to hit long SL) — SL stays fixed
@@ -498,7 +501,7 @@ function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles 
       return { outcome: 'loss', exitPrice: slPrice, exitTime: fc.time, exitReason: 'sl' }
     }
 
-    // TP hit (price goes UP to hit long TP) — ONLY way to win
+    // TP hit (price goes UP to hit long TP)
     if (fc.high >= tpPrice) {
       return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time, exitReason: 'tp' }
     }
@@ -506,7 +509,8 @@ function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles 
 
   if (simCandles.length > 0) {
     const lastCandle = simCandles[Math.min(simCandles.length - 1, maxCandles - 1)]
-    return { outcome: 'loss', exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit' }
+    const outcome = lastCandle.close > entryPrice ? 'win' : 'loss'
+    return { outcome, exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit' }
   }
   return null
 }
