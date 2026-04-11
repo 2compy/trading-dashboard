@@ -399,10 +399,6 @@ function isMGCLongKillZone(ts) {
 
 const MAX_TRADE_DURATION = 43200  // 12 hours in seconds — enough time for trades to reach TP
 
-// ── Breakeven stop — when trade moves BE_TRIGGER% toward TP, move SL to entry ─
-const BE_TRIGGER = 0.5   // 50% of TP distance triggers breakeven move
-const BE_OFFSET  = 0.5   // 0.5-point buffer past entry (covers fees/slippage)
-
 // ── EMA trend filter ────────────────────────────────────────────────────────
 const EMA_PERIOD = 50    // 50-period EMA on 5m candles for trend direction
 function computeEMA(candles, period = EMA_PERIOD) {
@@ -453,32 +449,22 @@ function isVolatileEnough(candles, lookback = 14) {
   return recentATR >= avgATR * MIN_ATR_MULT
 }
 
-// ── SHORT simulation — exit at TP, SL, breakeven, or max duration ───────────
+// ── SHORT simulation — exit at TP, SL, or max duration (SL never moves) ─────
 function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300, entryTime = 0) {
   const tpDist = entryPrice - tpPrice
   if (tpDist <= 0) return null
 
-  let currentSL = slPrice
-  let beActivated = false
-
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
 
-    // Max duration — force close (never counts as win — must hit TP to win)
+    // Max duration — force close
     if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
-      return { outcome: 'breakeven', exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout' }
+      return { outcome: 'loss', exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout' }
     }
 
-    // Breakeven stop: if price moved BE_TRIGGER% toward TP, move SL to entry
-    if (!beActivated && fc.low <= entryPrice - tpDist * BE_TRIGGER) {
-      beActivated = true
-      currentSL = entryPrice + BE_OFFSET
-    }
-
-    // SL hit (price goes UP to hit short SL)
-    if (fc.high >= currentSL) {
-      const outcome = beActivated ? 'breakeven' : 'loss'
-      return { outcome, exitPrice: currentSL, exitTime: fc.time, exitReason: beActivated ? 'breakeven-stop' : 'sl' }
+    // SL hit (price goes UP to hit short SL) — SL stays fixed
+    if (fc.high >= slPrice) {
+      return { outcome: 'loss', exitPrice: slPrice, exitTime: fc.time, exitReason: 'sl' }
     }
 
     // TP hit (price goes DOWN to hit short TP) — ONLY way to win
@@ -487,40 +473,29 @@ function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles
     }
   }
 
-  // Candle limit — never counts as win
   if (simCandles.length > 0) {
     const lastCandle = simCandles[Math.min(simCandles.length - 1, maxCandles - 1)]
-    return { outcome: 'breakeven', exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit' }
+    return { outcome: 'loss', exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit' }
   }
   return null
 }
 
-// ── LONG simulation — exit at TP, SL, breakeven, or max duration ────────────
+// ── LONG simulation — exit at TP, SL, or max duration (SL never moves) ──────
 function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300, entryTime = 0) {
   const tpDist = tpPrice - entryPrice
   if (tpDist <= 0) return null
 
-  let currentSL = slPrice
-  let beActivated = false
-
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
 
-    // Max duration — force close (never counts as win — must hit TP to win)
+    // Max duration — force close
     if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
-      return { outcome: 'breakeven', exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout' }
+      return { outcome: 'loss', exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout' }
     }
 
-    // Breakeven stop: if price moved BE_TRIGGER% toward TP, move SL to entry
-    if (!beActivated && fc.high >= entryPrice + tpDist * BE_TRIGGER) {
-      beActivated = true
-      currentSL = entryPrice - BE_OFFSET
-    }
-
-    // SL hit (price goes DOWN to hit long SL)
-    if (fc.low <= currentSL) {
-      const outcome = beActivated ? 'breakeven' : 'loss'
-      return { outcome, exitPrice: currentSL, exitTime: fc.time, exitReason: beActivated ? 'breakeven-stop' : 'sl' }
+    // SL hit (price goes DOWN to hit long SL) — SL stays fixed
+    if (fc.low <= slPrice) {
+      return { outcome: 'loss', exitPrice: slPrice, exitTime: fc.time, exitReason: 'sl' }
     }
 
     // TP hit (price goes UP to hit long TP) — ONLY way to win
@@ -529,10 +504,9 @@ function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles 
     }
   }
 
-  // Candle limit — never counts as win
   if (simCandles.length > 0) {
     const lastCandle = simCandles[Math.min(simCandles.length - 1, maxCandles - 1)]
-    return { outcome: 'breakeven', exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit' }
+    return { outcome: 'loss', exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit' }
   }
   return null
 }
