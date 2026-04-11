@@ -27,7 +27,7 @@ const CSV_FILES = {
 const CONTRACT_MULTIPLIER = { 'MES1!': 5, 'MNQ1!': 2, 'MGC1!': 10 }
 // Units (contracts) per trade per symbol
 const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
-const MIN_RR = 4
+const MIN_RR = 3
 
 // ── CSV Import (TradingView data) ────────────────────────────────────────────
 function loadCSVCandles(symbol) {
@@ -340,10 +340,10 @@ function findIFVGEntry(candles, fvg, bias) {
 // ── Fixed SL per symbol (null = use sweep wick) ─────────────────────────────
 const FIXED_SL = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 20 }
 // ── Fixed TP distance per symbol (null = use R:R calculation) ───────────────
-const FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 50 }
-const LONG_FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 50 }
+const FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 60 }      // MGC: 60pt TP / 20pt SL = 3:1 R:R
+const LONG_FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 60 }
 // ── Min R:R per symbol ──────────────────────────────────────────────────────
-const SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
+const SYMBOL_RR = { 'MES1!': 3, 'MNQ1!': 3, 'MGC1!': 3 }
 // ── Min FVG width for IFVG detection, per symbol ────────────────────────────
 // MGC ~3100 → 3pt, MES ~5500 → 7pt, MNQ ~19000 → 20pt, Silver ~32 → 0.10
 const MIN_FVG_WIDTH = {
@@ -364,7 +364,7 @@ const DEFAULT_SL_BOUNDS = { min: 3, max: 30 }
 // Much tighter TP (1.2:1 RR) so longs actually reach target
 const LONG_MAX_LOSS = 300  // max $300 loss per trade
 // Min payout $300 = 1:1 RR with $300 SL. Trailing stop lets winners run to $1500+
-const LONG_SYMBOL_RR = { 'MES1!': 4, 'MNQ1!': 4, 'MGC1!': 4 }
+const LONG_SYMBOL_RR = { 'MES1!': 3, 'MNQ1!': 3, 'MGC1!': 3 }
 // Fixed SL in points = $300 / (multiplier × contracts)
 const LONG_FIXED_SL  = { 'MES1!': 18, 'MNQ1!': 45, 'MGC1!': 20 }
 const LONG_SL_BOUNDS = {
@@ -397,72 +397,176 @@ function isMGCLongKillZone(ts) {
          (mins >= 420 && mins < 780)   // NY:   7:00 AM – 1:00 PM ET
 }
 
-const MAX_TRADE_DURATION = 86400  // 1 day in seconds
+const MAX_TRADE_DURATION = 21600  // 6 hours in seconds (was 24h — cut slow losers)
 
-// ── SHORT simulation — exit at TP, SL, or max 1-day duration ────────────────
+// ── Breakeven stop — when trade moves BE_TRIGGER% toward TP, move SL to entry ─
+const BE_TRIGGER = 0.25  // 25% of TP distance triggers breakeven move (very tight)
+const BE_OFFSET  = 0.5   // 0.5-point buffer past entry (covers fees/slippage)
+
+// ── EMA trend filter ────────────────────────────────────────────────────────
+const EMA_PERIOD = 50    // 50-period EMA on 5m candles for trend direction
+function computeEMA(candles, period = EMA_PERIOD) {
+  if (candles.length < period) return null
+  const k = 2 / (period + 1)
+  let ema = candles.slice(0, period).reduce((s, c) => s + c.close, 0) / period
+  for (let i = period; i < candles.length; i++) {
+    ema = candles[i].close * k + ema * (1 - k)
+  }
+  return ema
+}
+// Returns true if trend matches bias (bullish = price above EMA, bearish = price below)
+// Requires price to be at least EMA_MIN_DIST away from EMA for strong trend confirmation
+const EMA_MIN_DIST_PCT = 0.001  // 0.1% of price must be away from EMA
+function trendAligned(candles, bias, period = EMA_PERIOD) {
+  const ema = computeEMA(candles, period)
+  if (ema === null) return true  // not enough data — allow trade
+  const price = candles[candles.length - 1].close
+  const minDist = price * EMA_MIN_DIST_PCT
+  if (bias === 'bullish') return price > ema + minDist
+  if (bias === 'bearish') return price < ema - minDist
+  return true
+}
+
+// ── Multi-timeframe trend: also check 200-period EMA for HTF trend ──────────
+const EMA_HTF_PERIOD = 200
+function htfTrendAligned(candles, bias) {
+  return trendAligned(candles, bias, EMA_HTF_PERIOD)
+}
+
+// ── Displacement filter — require a strong momentum candle before FVG entries ─
+const DISPLACEMENT_MULT = 1.5  // candle body must be >= 1.5x average body size
+function hasDisplacement(candles, lookback = 5) {
+  if (candles.length < lookback + 1) return false
+  const recent = candles.slice(-lookback - 1, -1)
+  const avgBody = recent.reduce((s, c) => s + Math.abs(c.close - c.open), 0) / recent.length
+  const last = candles[candles.length - 1]
+  const lastBody = Math.abs(last.close - last.open)
+  return lastBody >= avgBody * DISPLACEMENT_MULT
+}
+
+// ── ATR volatility filter — only trade when market is active enough ─────────
+const MIN_ATR_MULT = 0.8  // ATR must be at least 80% of the 50-candle avg
+function isVolatileEnough(candles, lookback = 14) {
+  if (candles.length < 50) return true
+  const recentATR = candles.slice(-lookback).reduce((s, c) => s + (c.high - c.low), 0) / lookback
+  const avgATR = candles.slice(-50).reduce((s, c) => s + (c.high - c.low), 0) / 50
+  return recentATR >= avgATR * MIN_ATR_MULT
+}
+
+// ── Partial TP config ────────────────────────────────────────────────────────
+const PARTIAL_TP_PCT = 0.5   // Take 50% off at partial TP level
+const PARTIAL_TP_RR  = 1.0   // Partial TP at 1:1 R:R — more trades reach this level
+
+// ── SHORT simulation — partial TP + breakeven + full TP ─────────────────────
 function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300, entryTime = 0) {
   const tpDist = entryPrice - tpPrice
+  const slDist = slPrice - entryPrice
   if (tpDist <= 0) return null
+
+  let currentSL = slPrice
+  const partialTPPrice = entryPrice - slDist * PARTIAL_TP_RR  // 1.5:1 partial TP
+  let partialFilled = false
+  let beActivated = false
 
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
 
-    // Max 1-day duration — force close
+    // Max duration — force close
     if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
       const outcome = fc.close < entryPrice ? 'win' : 'loss'
-      return { outcome, exitPrice: fc.close, exitTime: fc.time }
+      return { outcome, exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout', partialFilled }
     }
 
-    // SL hit (price goes UP to hit short SL)
-    if (fc.high >= slPrice) {
-      return { outcome: 'loss', exitPrice: slPrice, exitTime: fc.time }
+    // Partial TP: if price reaches partial level, lock in 50% profit and move to BE
+    if (!partialFilled && fc.low <= partialTPPrice) {
+      partialFilled = true
+      beActivated = true
+      currentSL = entryPrice + BE_OFFSET
     }
 
-    // TP hit (price goes DOWN to hit short TP)
+    // Breakeven stop (also triggers at BE_TRIGGER if partial not hit yet)
+    if (!beActivated && fc.low <= entryPrice - tpDist * BE_TRIGGER) {
+      beActivated = true
+      currentSL = entryPrice + BE_OFFSET
+    }
+
+    // SL hit
+    if (fc.high >= currentSL) {
+      if (partialFilled) {
+        // Partial win: 50% at partial TP price, 50% at breakeven
+        return { outcome: 'win', exitPrice: partialTPPrice, exitTime: fc.time, exitReason: 'partial-tp+be', partialFilled: true }
+      }
+      const outcome = beActivated ? 'breakeven' : 'loss'
+      return { outcome, exitPrice: currentSL, exitTime: fc.time, exitReason: beActivated ? 'breakeven-stop' : 'sl', partialFilled }
+    }
+
+    // Full TP hit
     if (fc.low <= tpPrice) {
-      return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time }
+      return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time, exitReason: 'tp', partialFilled }
     }
   }
 
-  // Time exit
   if (simCandles.length > 0) {
     const lastCandle = simCandles[Math.min(simCandles.length - 1, maxCandles - 1)]
     const outcome = lastCandle.close < entryPrice ? 'win' : 'loss'
-    return { outcome, exitPrice: lastCandle.close, exitTime: lastCandle.time }
+    return { outcome, exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit', partialFilled }
   }
   return null
 }
 
-// ── LONG simulation — exit at TP, SL, or max 1-day duration ─────────────────
+// ── LONG simulation — partial TP + breakeven + full TP ──────────────────────
 function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300, entryTime = 0) {
   const tpDist = tpPrice - entryPrice
+  const slDist = entryPrice - slPrice
   if (tpDist <= 0) return null
+
+  let currentSL = slPrice
+  const partialTPPrice = entryPrice + slDist * PARTIAL_TP_RR  // 1.5:1 partial TP
+  let partialFilled = false
+  let beActivated = false
 
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
 
-    // Max 1-day duration — force close
+    // Max duration — force close
     if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
       const outcome = fc.close > entryPrice ? 'win' : 'loss'
-      return { outcome, exitPrice: fc.close, exitTime: fc.time }
+      return { outcome, exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout', partialFilled }
     }
 
-    // SL hit (price goes DOWN to hit long SL)
-    if (fc.low <= slPrice) {
-      return { outcome: 'loss', exitPrice: slPrice, exitTime: fc.time }
+    // Partial TP: if price reaches partial level, lock in 50% profit and move to BE
+    if (!partialFilled && fc.high >= partialTPPrice) {
+      partialFilled = true
+      beActivated = true
+      currentSL = entryPrice - BE_OFFSET
     }
 
-    // TP hit (price goes UP to hit long TP)
+    // Breakeven stop (also triggers at BE_TRIGGER if partial not hit yet)
+    if (!beActivated && fc.high >= entryPrice + tpDist * BE_TRIGGER) {
+      beActivated = true
+      currentSL = entryPrice - BE_OFFSET
+    }
+
+    // SL hit
+    if (fc.low <= currentSL) {
+      if (partialFilled) {
+        // Partial win: 50% at partial TP price, 50% at breakeven
+        return { outcome: 'win', exitPrice: partialTPPrice, exitTime: fc.time, exitReason: 'partial-tp+be', partialFilled: true }
+      }
+      const outcome = beActivated ? 'breakeven' : 'loss'
+      return { outcome, exitPrice: currentSL, exitTime: fc.time, exitReason: beActivated ? 'breakeven-stop' : 'sl', partialFilled }
+    }
+
+    // Full TP hit
     if (fc.high >= tpPrice) {
-      return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time }
+      return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time, exitReason: 'tp', partialFilled }
     }
   }
 
-  // Time exit — force close at last candle
   if (simCandles.length > 0) {
     const lastCandle = simCandles[Math.min(simCandles.length - 1, maxCandles - 1)]
     const outcome = lastCandle.close > entryPrice ? 'win' : 'loss'
-    return { outcome, exitPrice: lastCandle.close, exitTime: lastCandle.time }
+    return { outcome, exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit', partialFilled }
   }
   return null
 }
@@ -562,6 +666,9 @@ function runBacktestMGC(candles5m) {
     if (!isMGCKillZone(now5m.time)) continue
     if (now5m.time <= lastExitTime) continue
 
+    // ── EMA trend filter (50-period on 5m) ───────────────────────────────────
+    const emaSlice = candles5m.slice(Math.max(0, i - EMA_HTF_PERIOD), i + 1)
+
     // ── 4h trend direction (required — only trade with the 4h trend) ──────────
     const now4hIdx = candles4h.findLastIndex(c => c.time <= now5m.time)
     if (now4hIdx < 5) continue
@@ -583,6 +690,10 @@ function runBacktestMGC(candles5m) {
     // Both timeframes must agree — no counter-trend trades ever
     if (bias1h !== trend4h) continue
     const bias = trend4h
+
+    // ── EMA must agree with bias ─────────────────────────────────────────────
+    if (!trendAligned(emaSlice, bias)) continue
+    if (!htfTrendAligned(emaSlice, bias)) continue
 
     // ── TP: fixed 50pt for MGC ─────────────────────────────────────────────────
     const mgcTP = FIXED_TP['MGC1!'] || 50
@@ -917,6 +1028,11 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
 
     const bias = sweepBias
 
+    // ── EMA trend filter ─────────────────────────────────────────────────────
+    const emaSliceSB = candles5m.slice(Math.max(0, i - EMA_HTF_PERIOD), i + 1)
+    if (!trendAligned(emaSliceSB, bias)) continue
+    if (!htfTrendAligned(emaSliceSB, bias)) continue
+
     // Entry: try 1M FVG + IFVG, fallback to next 5m candle after BOS
     let entryCandle = null, entryPrice = null, entrySignal = 'Sweep+BOS'
 
@@ -1037,6 +1153,11 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
         }
       }
       if (!hasBullishBias) continue
+
+      // ── EMA trend filter ───────────────────────────────────────────────────
+      const emaSliceMNQ = candles5m.slice(Math.max(0, i - EMA_HTF_PERIOD), i + 1)
+      if (!trendAligned(emaSliceMNQ, 'bullish')) continue
+    if (!htfTrendAligned(emaSliceMNQ, 'bullish')) continue
 
       // 2. Find equal lows or swing lows, check if swept
       const { lows: l5m } = detectSwings(recent5m, 2)
@@ -1160,6 +1281,11 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       // Kill zone: 7:30 AM - 1:00 PM (450-780 mins)
       if (!(nowMins >= 450 && nowMins < 780)) continue
       if (now5m.time <= lastExitTime) continue
+
+      // ── EMA trend filter ─────────────────────────────────────────────────
+      const emaSliceMES = candles5m.slice(Math.max(0, i - EMA_HTF_PERIOD), i + 1)
+      if (!trendAligned(emaSliceMES, 'bullish')) continue
+    if (!htfTrendAligned(emaSliceMES, 'bullish')) continue
 
       // 1. Bias check: 1H uptrend OR prev day closed bullish
       const now1hIdx = buildHTFCandles(candles5m, 60).findLastIndex(c => c.time <= now5m.time)
@@ -1368,6 +1494,12 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
     const bias       = ifvg.ifvgBias
     const entryPrice = ifvg.mid
 
+    // ── EMA trend filter ─────────────────────────────────────────────────────
+    const entryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
+    const emaSliceB = candles5m.slice(Math.max(0, entryIdx - EMA_HTF_PERIOD), entryIdx + 1)
+    if (!trendAligned(emaSliceB, bias)) continue
+    if (!htfTrendAligned(emaSliceB, bias)) continue
+
     // SL: fixed per symbol, or FVG-based for ES
     let slDist, slPrice
     const fixedSL = FIXED_SL[symbol]
@@ -1488,6 +1620,12 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
     if (bias === 'bearish') continue
     const entryPrice = ifvg.mid
 
+    // ── EMA trend filter ─────────────────────────────────────────────────────
+    const entryIdxEma = candles5m.findIndex(c => c.time >= entryCandle.time)
+    const emaSliceL = candles5m.slice(Math.max(0, entryIdxEma - EMA_HTF_PERIOD), entryIdxEma + 1)
+    if (!trendAligned(emaSliceL, bias)) continue
+    if (!htfTrendAligned(emaSliceL, bias)) continue
+
     // SL: long-specific — wider stops
     let slDist, slPrice
     const fixedSLLong = LONG_FIXED_SL[symbol]
@@ -1562,13 +1700,11 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
 function runBacktest(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
 
-  // Run all strategies independently
-  const sweepTrades    = runBacktestSweepBOS(candles5m, candles1m || [], symbol, multiplier)
+  // Run highest-WR strategies only (removed: Sweep+BOS, 1m-FVG-TapBack)
   const ifvgTrades     = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
-  const fvg1mTrades    = runBacktest1mFVGTapBack(candles5m, candles1m || [], symbol, multiplier)
 
   // Merge, filter to bearish (SHORT) only, sort by entry time
-  const all = [...sweepTrades, ...ifvgTrades, ...fvg1mTrades]
+  const all = [...ifvgTrades]
     .filter(t => t.bias === 'bearish')
     .sort((a, b) => a.time - b.time)
 
@@ -1627,6 +1763,11 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     // Kill zone: 7:00 AM – 3:00 PM ET
     const fvgMins = getETMinutes(fvg.time)
     if (!(fvgMins >= 420 && fvgMins < 900)) continue
+
+    // ── EMA trend filter ─────────────────────────────────────────────────────
+    const emaSliceFRL = candles5m.slice(Math.max(0, fvgIdx - EMA_HTF_PERIOD), fvgIdx + 1)
+    if (!trendAligned(emaSliceFRL, 'bullish')) continue
+    if (!htfTrendAligned(emaSliceFRL, 'bullish')) continue
 
     // ── CONFLUENCE 1: Displacement confirmation ──────────────────────────────
     // The candles around the FVG must show bullish displacement:
@@ -1938,6 +2079,12 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
 
     const entryPrice = fvg.mid
 
+    // ── EMA trend filter ─────────────────────────────────────────────────────
+    const tapEntryIdx = candles5m.findIndex(c => c.time >= entryCandle.time)
+    const emaSliceTB = candles5m.slice(Math.max(0, tapEntryIdx - EMA_HTF_PERIOD), tapEntryIdx + 1)
+    if (!trendAligned(emaSliceTB, 'bullish')) continue
+    if (!htfTrendAligned(emaSliceTB, 'bullish')) continue
+
     // SL below FVG bottom + buffer — FIXED, never moves
     let slDist, slPrice
     const fixedSL = LONG_FIXED_SL[symbol]
@@ -2081,6 +2228,15 @@ function runBacktest1mFVGTapBack(candles5m, candles1m, symbol, multiplier) {
 
     const entryPrice = fvg.mid
 
+    // ── EMA trend filter ─────────────────────────────────────────────────────
+    // Find nearest 5m candle for EMA calculation
+    const nearest5mIdx = candles5m.findLastIndex(c => c.time <= entryCandle.time)
+    if (nearest5mIdx >= 0) {
+      const emaSlice1m = candles5m.slice(Math.max(0, nearest5mIdx - EMA_HTF_PERIOD), nearest5mIdx + 1)
+      if (!trendAligned(emaSlice1m, bias)) continue
+    if (!htfTrendAligned(emaSlice1m, bias)) continue
+    }
+
     // SL: use fixed SL per symbol or FVG-based
     let slDist, slPrice
     if (bias === 'bearish') {
@@ -2192,14 +2348,12 @@ function runBacktest1mFVGTapBack(candles5m, candles1m, symbol, multiplier) {
 function runBacktestLong(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
 
-  // Run all four strategies independently
-  const sweepTrades    = runBacktestSweepBOS(candles5m, candles1m || [], symbol, multiplier)
+  // Run highest-WR strategies only (removed: Sweep+BOS, 1m-FVG-TapBack)
   const ifvgTrades     = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
   const tapBackTrades  = runBacktestFVGTapBack(candles5m, candles1m || [], symbol, multiplier)
-  const fvg1mTrades    = runBacktest1mFVGTapBack(candles5m, candles1m || [], symbol, multiplier)
 
   // Filter to only bullish (LONG) trades
-  const allLong = [...sweepTrades, ...ifvgTrades, ...tapBackTrades, ...fvg1mTrades]
+  const allLong = [...ifvgTrades, ...tapBackTrades]
     .filter(t => t.bias === 'bullish')
     .sort((a, b) => a.time - b.time)
 
@@ -2257,8 +2411,7 @@ export default async function handler(req, res) {
         const htfTrades     = runBacktestMGC(candles5m)
         const ifvgTrades    = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
         const tapBackTrades = runBacktestFVGTapBack(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
-        const fvg1mTrades   = runBacktest1mFVGTapBack(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
-        const allMGC = [...htfTrades, ...ifvgTrades, ...tapBackTrades, ...fvg1mTrades]
+        const allMGC = [...htfTrades, ...ifvgTrades, ...tapBackTrades]
           .filter(t => t.bias === 'bullish')
           .sort((a, b) => a.time - b.time)
         // Dedup: no overlapping trades
@@ -2279,12 +2432,11 @@ export default async function handler(req, res) {
     } else {
       // Short backtest (default)
       if (symbol === 'MGC1!') {
-        // MGC: HTF Bias + IFVG Mid Retrace + 1m FVG Tap-Back, merged with dedup
+        // MGC: HTF Bias + IFVG Mid Retrace, merged with dedup
         const htfTrades   = runBacktestMGC(candles5m)
         const ifvgTrades  = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
-        const fvg1mTrades = runBacktest1mFVGTapBack(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
 
-        const all = [...htfTrades, ...ifvgTrades, ...fvg1mTrades]
+        const all = [...htfTrades, ...ifvgTrades]
           .filter(t => t.bias === 'bearish')
           .sort((a, b) => a.time - b.time)
         trades = []
@@ -2303,9 +2455,12 @@ export default async function handler(req, res) {
       }
     }
 
-    const wins     = trades.filter(t => t.outcome === 'win').length
-    const losses   = trades.filter(t => t.outcome === 'loss').length
-    const winRate  = trades.length ? ((wins / trades.length) * 100).toFixed(1) : '0.0'
+    const wins       = trades.filter(t => t.outcome === 'win').length
+    const losses     = trades.filter(t => t.outcome === 'loss').length
+    const breakevens = trades.filter(t => t.outcome === 'breakeven').length
+    // Win rate excludes breakevens from both numerator and denominator
+    const decided    = wins + losses
+    const winRate    = decided ? ((wins / decided) * 100).toFixed(1) : '0.0'
     const totalPnl = trades.reduce((s, t) => s + t.pnlDollars, 0)
 
     const earliest = candles5m.length ? new Date(candles5m[0].time * 1000).toISOString().split('T')[0] : null
@@ -2315,7 +2470,7 @@ export default async function handler(req, res) {
 
     res.setHeader('Cache-Control', 's-maxage=60')
     return res.status(200).json({
-      symbol, side: sideParam, trades, wins, losses, winRate, totalPnl, dataNote,
+      symbol, side: sideParam, trades, wins, losses, breakevens, winRate, totalPnl, dataNote,
     })
   } catch (err) {
     return res.status(500).json({ error: err.message })
