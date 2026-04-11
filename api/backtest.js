@@ -457,13 +457,7 @@ function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
 
-    // Max duration — force close (win if profitable, loss if not)
-    if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
-      const outcome = fc.close < entryPrice ? 'win' : 'loss'
-      return { outcome, exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout' }
-    }
-
-    // SL hit (price goes UP to hit short SL) — SL stays fixed
+    // SL hit (price goes UP to hit short SL) — ALWAYS checked first
     if (fc.high >= slPrice) {
       return { outcome: 'loss', exitPrice: slPrice, exitTime: fc.time, exitReason: 'sl' }
     }
@@ -472,12 +466,22 @@ function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles
     if (fc.low <= tpPrice) {
       return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time, exitReason: 'tp' }
     }
+
+    // Max duration — force close, but cap loss at SL
+    if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
+      // If close is past SL, exit at SL instead
+      const exitPx = fc.close > slPrice ? slPrice : fc.close
+      const outcome = exitPx < entryPrice ? 'win' : 'loss'
+      return { outcome, exitPrice: exitPx, exitTime: fc.time, exitReason: 'timeout' }
+    }
   }
 
   if (simCandles.length > 0) {
     const lastCandle = simCandles[Math.min(simCandles.length - 1, maxCandles - 1)]
-    const outcome = lastCandle.close < entryPrice ? 'win' : 'loss'
-    return { outcome, exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit' }
+    // Cap exit at SL — never lose more than the stop loss
+    const exitPx = lastCandle.close > slPrice ? slPrice : lastCandle.close
+    const outcome = exitPx < entryPrice ? 'win' : 'loss'
+    return { outcome, exitPrice: exitPx, exitTime: lastCandle.time, exitReason: 'candle-limit' }
   }
   return null
 }
@@ -490,13 +494,7 @@ function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles 
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
 
-    // Max duration — force close (win if profitable, loss if not)
-    if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
-      const outcome = fc.close > entryPrice ? 'win' : 'loss'
-      return { outcome, exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout' }
-    }
-
-    // SL hit (price goes DOWN to hit long SL) — SL stays fixed
+    // SL hit (price goes DOWN to hit long SL) — ALWAYS checked first
     if (fc.low <= slPrice) {
       return { outcome: 'loss', exitPrice: slPrice, exitTime: fc.time, exitReason: 'sl' }
     }
@@ -505,12 +503,22 @@ function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles 
     if (fc.high >= tpPrice) {
       return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time, exitReason: 'tp' }
     }
+
+    // Max duration — force close, but cap loss at SL
+    if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
+      // If close is past SL (below it for longs), exit at SL instead
+      const exitPx = fc.close < slPrice ? slPrice : fc.close
+      const outcome = exitPx > entryPrice ? 'win' : 'loss'
+      return { outcome, exitPrice: exitPx, exitTime: fc.time, exitReason: 'timeout' }
+    }
   }
 
   if (simCandles.length > 0) {
     const lastCandle = simCandles[Math.min(simCandles.length - 1, maxCandles - 1)]
-    const outcome = lastCandle.close > entryPrice ? 'win' : 'loss'
-    return { outcome, exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit' }
+    // Cap exit at SL — never lose more than the stop loss
+    const exitPx = lastCandle.close < slPrice ? slPrice : lastCandle.close
+    const outcome = exitPx > entryPrice ? 'win' : 'loss'
+    return { outcome, exitPrice: exitPx, exitTime: lastCandle.time, exitReason: 'candle-limit' }
   }
   return null
 }
