@@ -397,7 +397,8 @@ function isMGCLongKillZone(ts) {
          (mins >= 420 && mins < 780)   // NY:   7:00 AM – 1:00 PM ET
 }
 
-const MAX_TRADE_DURATION = 10800  // 3 hours in seconds
+let MAX_TRADE_DURATION = 10800  // 3 hours default
+const MGC_LONG_DURATION = 21600  // MGC long: 6 hours for higher PnL
 
 // ── EMA trend filter ────────────────────────────────────────────────────────
 const EMA_PERIOD = 50    // 50-period EMA on 5m candles for trend direction
@@ -450,7 +451,7 @@ function isVolatileEnough(candles, lookback = 14) {
 }
 
 // ── SHORT simulation — exit at TP, SL, or max duration (SL never moves) ─────
-function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 120, entryTime = 0) {
+function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 120, entryTime = 0, maxDuration = MAX_TRADE_DURATION) {
   const tpDist = entryPrice - tpPrice
   if (tpDist <= 0) return null
 
@@ -468,7 +469,7 @@ function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles
     }
 
     // Max duration — force close, but cap loss at SL
-    if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
+    if (entryTime > 0 && fc.time - entryTime >= maxDuration) {
       // If close is past SL, exit at SL instead
       const exitPx = fc.close > slPrice ? slPrice : fc.close
       const outcome = exitPx < entryPrice ? 'win' : 'loss'
@@ -487,7 +488,7 @@ function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles
 }
 
 // ── LONG simulation — exit at TP, SL, or max duration (SL never moves) ──────
-function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 120, entryTime = 0) {
+function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 120, entryTime = 0, maxDuration = MAX_TRADE_DURATION) {
   const tpDist = tpPrice - entryPrice
   if (tpDist <= 0) return null
 
@@ -505,7 +506,7 @@ function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles 
     }
 
     // Max duration — force close, but cap loss at SL
-    if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
+    if (entryTime > 0 && fc.time - entryTime >= maxDuration) {
       // If close is past SL (below it for longs), exit at SL instead
       const exitPx = fc.close < slPrice ? slPrice : fc.close
       const outcome = exitPx > entryPrice ? 'win' : 'loss'
@@ -3013,12 +3014,15 @@ export default async function handler(req, res) {
     if (sideParam === 'long') {
       // Long backtest — mirrors SHORT strategy (Sweep+BOS + IFVG), filtered to bullish
       if (symbol === 'MGC1!') {
-        // MGC Long: HTF Bias + IFVG Mid + Uptrend FVG Tap-Back + LiqSweep+FVG + OrderBlock
+        // MGC Long: use 6hr duration for higher PnL
+        const savedDuration = MAX_TRADE_DURATION
+        MAX_TRADE_DURATION = MGC_LONG_DURATION
         const htfTrades     = runBacktestMGC(candles5m)
         const ifvgTrades    = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
         const tapBackTrades = runBacktestFVGTapBack(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
         const liqSweepTrades = runBacktestLiqSweepFVG(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCLongKillZone)
         const obTrades      = runBacktestOrderBlock(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCLongKillZone)
+        MAX_TRADE_DURATION = savedDuration  // restore default
         const allMGC = [...htfTrades, ...ifvgTrades, ...tapBackTrades, ...liqSweepTrades, ...obTrades]
           .filter(t => t.bias === 'bullish')
           .sort((a, b) => a.time - b.time)
