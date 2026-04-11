@@ -397,7 +397,7 @@ function isMGCLongKillZone(ts) {
          (mins >= 420 && mins < 780)   // NY:   7:00 AM – 1:00 PM ET
 }
 
-const MAX_TRADE_DURATION = 43200  // 12 hours in seconds — enough time for trades to reach TP
+const MAX_TRADE_DURATION = 7200  // 2 hours in seconds
 
 // ── EMA trend filter ────────────────────────────────────────────────────────
 const EMA_PERIOD = 50    // 50-period EMA on 5m candles for trend direction
@@ -450,7 +450,7 @@ function isVolatileEnough(candles, lookback = 14) {
 }
 
 // ── SHORT simulation — exit at TP, SL, or max duration (SL never moves) ─────
-function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300, entryTime = 0) {
+function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 120, entryTime = 0) {
   const tpDist = entryPrice - tpPrice
   if (tpDist <= 0) return null
 
@@ -487,7 +487,7 @@ function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles
 }
 
 // ── LONG simulation — exit at TP, SL, or max duration (SL never moves) ──────
-function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300, entryTime = 0) {
+function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 120, entryTime = 0) {
   const tpDist = tpPrice - entryPrice
   if (tpDist <= 0) return null
 
@@ -701,9 +701,9 @@ function runBacktestMGC(candles5m) {
 
     let simResult = null
     if (bias === 'bearish') {
-      simResult = simulateShortTrade(future5m, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+      simResult = simulateShortTrade(future5m, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     } else {
-      simResult = simulateLongTrade(future5m, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+      simResult = simulateLongTrade(future5m, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     }
     if (!simResult) continue
 
@@ -1033,9 +1033,9 @@ function runBacktestSweepBOS(candles5m, candles1m, symbol, multiplier) {
 
     let simResult = null
     if (bias === 'bearish') {
-      simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+      simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     } else {
-      simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+      simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     }
     if (!simResult) continue
 
@@ -1200,7 +1200,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       const entryIdx5m = candles5m.findIndex(c => c.time >= entryCandle.time)
       const simCandles = future1m.length > 0 ? future1m : candles5m.slice(entryIdx5m + 1, entryIdx5m + 200)
 
-      const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+      const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
       if (!simResult) continue
 
       const { outcome, exitPrice, exitTime } = simResult
@@ -1380,7 +1380,7 @@ function runBacktestSweepBOSLong(candles5m, candles1m, symbol, multiplier) {
       const entryIdx5m = candles5m.findIndex(c => c.time >= entryCandle.time)
       const simCandles = future1m.length > 0 ? future1m : candles5m.slice(entryIdx5m + 1, entryIdx5m + 200)
 
-      const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+      const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
       if (!simResult) continue
 
       const { outcome, exitPrice, exitTime } = simResult
@@ -1504,9 +1504,9 @@ function runBacktestIFVGMid(candles5m, candles1m, symbol, multiplier, killZoneFn
 
     let simResult = null
     if (bias === 'bearish') {
-      simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+      simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     } else {
-      simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+      simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     }
     if (!simResult) continue
 
@@ -1622,7 +1622,7 @@ function runBacktestIFVGMidLong(candles5m, candles1m, symbol, multiplier, killZo
       ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
       : candles5m.slice(entryIdx + 1, entryIdx + 200)
 
-    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     if (!simResult) continue
 
     const { outcome, exitPrice, exitTime } = simResult
@@ -1750,7 +1750,7 @@ function runBacktestLiqSweepFVG(candles5m, candles1m, symbol, multiplier, killZo
                 ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
                 : candles5m.slice(entryIdx + 1, entryIdx + 200)
 
-              const simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+              const simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
               if (!simResult) continue
 
               const { outcome, exitPrice: simExit, exitTime } = simResult
@@ -1839,7 +1839,7 @@ function runBacktestLiqSweepFVG(candles5m, candles1m, symbol, multiplier, killZo
                 ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
                 : candles5m.slice(entryIdx + 1, entryIdx + 200)
 
-              const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+              const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
               if (!simResult) continue
 
               const { outcome, exitPrice: simExit, exitTime } = simResult
@@ -1989,7 +1989,7 @@ function runBacktestOrderBlock(candles5m, candles1m, symbol, multiplier, killZon
           ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
           : candles5m.slice(entryIdx + 1, entryIdx + 200)
 
-        const simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+        const simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
         if (!simResult) continue
 
         const { outcome, exitPrice: simExit, exitTime } = simResult
@@ -2087,7 +2087,7 @@ function runBacktestOrderBlock(candles5m, candles1m, symbol, multiplier, killZon
           ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
           : candles5m.slice(entryIdx + 1, entryIdx + 200)
 
-        const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+        const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
         if (!simResult) continue
 
         const { outcome, exitPrice: simExit, exitTime } = simResult
@@ -2300,7 +2300,7 @@ function runBacktestFVGRetraceLong(candles5m, candles1m, symbol, multiplier) {
     const ei5m = candles5m.findIndex(c => c.time >= entryCandle.time)
     const simCandles = fut1m.length > 0 ? fut1m : candles5m.slice(ei5m + 1, ei5m + 250)
 
-    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     if (!simResult) continue
 
     const { outcome, exitPrice, exitTime } = simResult
@@ -2481,7 +2481,7 @@ function runBacktestFVGRetraceShort(candles5m, candles1m, symbol, multiplier) {
     const ei5m = candles5m.findIndex(c => c.time >= entryCandle.time)
     const simCandles = fut1m.length > 0 ? fut1m : candles5m.slice(ei5m + 1, ei5m + 250)
 
-    const simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+    const simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     if (!simResult) continue
 
     const { outcome, exitPrice, exitTime } = simResult
@@ -2581,7 +2581,7 @@ function runBacktestMomentumLong(candles5m, candles1m, symbol, multiplier) {
     const fut1m = candles1m.slice(ei1m + 1, ei1m + 500)
     const simCandles = fut1m.length > 0 ? fut1m : candles5m.slice(ei5m + 1, ei5m + 250)
 
-    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     if (!simResult) continue
 
     const { outcome, exitPrice, exitTime } = simResult
@@ -2731,7 +2731,7 @@ function runBacktestFVGTapBack(candles5m, candles1m, symbol, multiplier) {
     const ei5m = candles5m.findIndex(c => c.time >= entryCandle.time)
     const simCandles = fut1m.length > 0 ? fut1m : candles5m.slice(ei5m + 1, ei5m + 250)
 
-    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+    const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     if (!simResult) continue
 
     const { outcome, exitPrice, exitTime } = simResult
@@ -2917,9 +2917,9 @@ function runBacktest1mFVGTapBack(candles5m, candles1m, symbol, multiplier) {
 
     let simResult
     if (bias === 'bearish') {
-      simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+      simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     } else {
-      simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+      simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 120, entryCandle.time)
     }
     if (!simResult) continue
 
