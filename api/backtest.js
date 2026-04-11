@@ -27,7 +27,7 @@ const CSV_FILES = {
 const CONTRACT_MULTIPLIER = { 'MES1!': 5, 'MNQ1!': 2, 'MGC1!': 10 }
 // Units (contracts) per trade per symbol
 const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
-const MIN_RR = 2
+const MIN_RR = 3
 
 // ── CSV Import (TradingView data) ────────────────────────────────────────────
 function loadCSVCandles(symbol) {
@@ -340,10 +340,10 @@ function findIFVGEntry(candles, fvg, bias) {
 // ── Fixed SL per symbol (null = use sweep wick) ─────────────────────────────
 const FIXED_SL = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 20 }
 // ── Fixed TP distance per symbol (null = use R:R calculation) ───────────────
-const FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 40 }      // MGC: 40pt TP / 20pt SL = 2:1 R:R
-const LONG_FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 40 }
+const FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 60 }      // MGC: 60pt TP / 20pt SL = 3:1 R:R
+const LONG_FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 60 }
 // ── Min R:R per symbol — 2:1 target
-const SYMBOL_RR = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
+const SYMBOL_RR = { 'MES1!': 3, 'MNQ1!': 3, 'MGC1!': 3 }
 // ── Min FVG width for IFVG detection, per symbol ────────────────────────────
 // MGC ~3100 → 3pt, MES ~5500 → 7pt, MNQ ~19000 → 20pt, Silver ~32 → 0.10
 const MIN_FVG_WIDTH = {
@@ -364,7 +364,7 @@ const DEFAULT_SL_BOUNDS = { min: 3, max: 30 }
 // Much tighter TP (1.2:1 RR) so longs actually reach target
 const LONG_MAX_LOSS = 300  // max $300 loss per trade
 // Min payout $300 = 1:1 RR with $300 SL. Trailing stop lets winners run to $1500+
-const LONG_SYMBOL_RR = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
+const LONG_SYMBOL_RR = { 'MES1!': 3, 'MNQ1!': 3, 'MGC1!': 3 }
 // Fixed SL in points = $300 / (multiplier × contracts)
 const LONG_FIXED_SL  = { 'MES1!': 18, 'MNQ1!': 45, 'MGC1!': 20 }
 const LONG_SL_BOUNDS = {
