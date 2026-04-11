@@ -1870,6 +1870,251 @@ function runBacktestLiqSweepFVG(candles5m, candles1m, symbol, multiplier, killZo
   return trades
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// ORDER BLOCK RETRACE — Institutional Footprint Entry
+//
+// The edge: An "order block" is the last opposing candle before a strong
+// displacement move. It marks where institutions placed large orders.
+// When price retraces to this level, institutions defend it — giving us
+// a high-probability entry with defined risk.
+//
+// Rules (all the same as other strategies):
+//   1. Detect displacement moves (2+ consecutive same-direction candles
+//      with above-average body size)
+//   2. Identify the order block: last opposing candle before displacement
+//   3. Wait for price to retrace back to the OB zone (OB high/low)
+//   4. Enter on first touch of OB zone, confirmed by a rejection candle
+//   5. SL: fixed per symbol or beyond the OB extreme
+//   6. TP: R:R based (uses SYMBOL_RR / LONG_SYMBOL_RR)
+//   7. Dual EMA filter (50 + 200 period)
+//   8. Kill zone filter
+//   9. No overlapping trades
+// ══════════════════════════════════════════════════════════════════════════════
+function runBacktestOrderBlock(candles5m, candles1m, symbol, multiplier, killZoneFn = isKillZone) {
+  const trades = []
+  if (!candles5m.length) return trades
+
+  const units = UNITS[symbol] || 1
+  let lastExitTime = 0
+  const usedOBTimes = new Set()
+  const usedEntryTimes = new Set()
+
+  // Pre-compute average candle body size for displacement detection
+  const avgBodySize = candles5m.reduce((s, c) => s + Math.abs(c.close - c.open), 0) / candles5m.length
+
+  for (let i = 25; i < candles5m.length - 5; i++) {
+    const c = candles5m[i]
+    if (!killZoneFn(c.time)) continue
+    if (c.time <= lastExitTime) continue
+
+    // ── EMA trend filter ─────────────────────────────────────────────────────
+    const emaSlice = candles5m.slice(Math.max(0, i - EMA_HTF_PERIOD), i + 1)
+
+    // ── Detect BEARISH displacement (2+ big red candles in a row) ────────────
+    const c1 = candles5m[i]
+    const c2 = candles5m[i - 1]
+    const body1 = Math.abs(c1.close - c1.open)
+    const body2 = Math.abs(c2.close - c2.open)
+    const isBearishDisp = c1.close < c1.open && c2.close < c2.open
+      && body1 >= avgBodySize * 1.3 && body2 >= avgBodySize * 0.8
+
+    if (isBearishDisp && trendAligned(emaSlice, 'bearish') && htfTrendAligned(emaSlice, 'bearish')) {
+      // Order block = last BULLISH candle before the displacement
+      let obCandle = null
+      for (let j = i - 2; j >= Math.max(0, i - 8); j--) {
+        if (candles5m[j].close > candles5m[j].open) {
+          obCandle = candles5m[j]
+          break
+        }
+      }
+      if (!obCandle || usedOBTimes.has(obCandle.time)) continue
+
+      // OB zone = from OB candle open (bottom) to OB candle high (top)
+      const obTop = obCandle.high
+      const obBottom = obCandle.open  // body open for a bullish candle
+
+      // Wait for retrace UP into OB zone (bearish entry)
+      const postDisp = candles5m.slice(i + 1, Math.min(i + 50, candles5m.length))
+      let entryCandle = null
+      for (let k = 0; k < postDisp.length; k++) {
+        const rc = postDisp[k]
+        // Price retraces into OB zone
+        if (rc.high >= obBottom && rc.high <= obTop + (obTop - obBottom) * 0.5) {
+          // Rejection: candle closes below the OB midpoint (showing sellers defending)
+          const obMid = (obTop + obBottom) / 2
+          if (rc.close < obMid) {
+            entryCandle = rc
+            break
+          }
+          // Or next candle rejects
+          if (k + 1 < postDisp.length && postDisp[k + 1].close < obMid) {
+            entryCandle = postDisp[k + 1]
+            break
+          }
+        }
+      }
+
+      if (entryCandle && !usedEntryTimes.has(entryCandle.time) && entryCandle.time > lastExitTime) {
+        const entryPrice = (obTop + obBottom) / 2  // OB midpoint entry
+
+        // SL: fixed or above OB top
+        let slDist
+        const fixedSL = FIXED_SL[symbol]
+        if (fixedSL != null) {
+          slDist = fixedSL
+        } else {
+          slDist = Math.abs(obTop - entryPrice) + 3
+          const slBounds = SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
+          if (slDist < slBounds.min || slDist > slBounds.max) continue
+        }
+        const slPrice = entryPrice + slDist
+
+        // TP: R:R based
+        const rr = SYMBOL_RR[symbol] || MIN_RR
+        let tpPrice
+        const fixedTPVal = FIXED_TP[symbol]
+        if (fixedTPVal != null) {
+          tpPrice = entryPrice - fixedTPVal
+        } else {
+          tpPrice = entryPrice - slDist * rr
+        }
+        if (tpPrice >= entryPrice) continue
+
+        const tpDist = Math.abs(entryPrice - tpPrice)
+
+        // Simulate
+        const entryIdx = candles5m.findIndex(x => x.time >= entryCandle.time)
+        const entryIdx1m = candles1m?.length ? candles1m.findIndex(x => x.time >= entryCandle.time) : -1
+        const simCandles = entryIdx1m >= 0 && entryIdx1m < candles1m.length - 1
+          ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
+          : candles5m.slice(entryIdx + 1, entryIdx + 200)
+
+        const simResult = simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+        if (!simResult) continue
+
+        const { outcome, exitPrice: simExit, exitTime } = simResult
+        const pnlPoints = outcome === 'win' ? entryPrice - simExit : -(simExit - entryPrice)
+        const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
+        const rrActual = parseFloat((tpDist / slDist).toFixed(2))
+
+        trades.push({
+          id: trades.length + 1, time: entryCandle.time, exitTime, bias: 'bearish',
+          entryPrice: parseFloat(entryPrice.toFixed(4)),
+          stopPrice: parseFloat(slPrice.toFixed(4)),
+          targetPrice: parseFloat(tpPrice.toFixed(4)),
+          exitPrice: parseFloat(simExit.toFixed(4)),
+          outcome, pnlDollars, rr: rrActual, contracts: units,
+          signal: 'OrderBlock-Retrace',
+        })
+
+        usedOBTimes.add(obCandle.time)
+        usedEntryTimes.add(entryCandle.time)
+        lastExitTime = exitTime || entryCandle.time
+      }
+    }
+
+    // ── Detect BULLISH displacement (2+ big green candles in a row) ──────────
+    const isBullishDisp = c1.close > c1.open && c2.close > c2.open
+      && body1 >= avgBodySize * 1.3 && body2 >= avgBodySize * 0.8
+
+    if (isBullishDisp && trendAligned(emaSlice, 'bullish') && htfTrendAligned(emaSlice, 'bullish')) {
+      // Order block = last BEARISH candle before the displacement
+      let obCandle = null
+      for (let j = i - 2; j >= Math.max(0, i - 8); j--) {
+        if (candles5m[j].close < candles5m[j].open) {
+          obCandle = candles5m[j]
+          break
+        }
+      }
+      if (!obCandle || usedOBTimes.has(obCandle.time)) continue
+
+      // OB zone = from OB candle low (bottom) to OB candle open (top, since it's bearish)
+      const obTop = obCandle.open   // body open for a bearish candle (higher price)
+      const obBottom = obCandle.low
+
+      // Wait for retrace DOWN into OB zone (bullish entry)
+      const postDisp = candles5m.slice(i + 1, Math.min(i + 50, candles5m.length))
+      let entryCandle = null
+      for (let k = 0; k < postDisp.length; k++) {
+        const rc = postDisp[k]
+        // Price retraces into OB zone
+        if (rc.low <= obTop && rc.low >= obBottom - (obTop - obBottom) * 0.5) {
+          // Rejection: candle closes above the OB midpoint (showing buyers defending)
+          const obMid = (obTop + obBottom) / 2
+          if (rc.close > obMid) {
+            entryCandle = rc
+            break
+          }
+          if (k + 1 < postDisp.length && postDisp[k + 1].close > obMid) {
+            entryCandle = postDisp[k + 1]
+            break
+          }
+        }
+      }
+
+      if (entryCandle && !usedEntryTimes.has(entryCandle.time) && entryCandle.time > lastExitTime) {
+        const entryPrice = (obTop + obBottom) / 2  // OB midpoint entry
+
+        // SL: fixed or below OB bottom
+        let slDist
+        const fixedSLLong = LONG_FIXED_SL[symbol]
+        if (fixedSLLong != null) {
+          slDist = fixedSLLong
+        } else {
+          slDist = Math.abs(entryPrice - obBottom) + 3
+          const slBounds = LONG_SL_BOUNDS[symbol] || DEFAULT_SL_BOUNDS
+          if (slDist < slBounds.min || slDist > slBounds.max) continue
+        }
+        const slPrice = entryPrice - slDist
+
+        // TP: R:R based
+        const rr = LONG_SYMBOL_RR[symbol] || MIN_RR
+        let tpPrice
+        const fixedTPVal = LONG_FIXED_TP[symbol]
+        if (fixedTPVal != null) {
+          tpPrice = entryPrice + fixedTPVal
+        } else {
+          tpPrice = entryPrice + slDist * rr
+        }
+        if (tpPrice <= entryPrice) continue
+
+        const tpDist = Math.abs(tpPrice - entryPrice)
+
+        // Simulate
+        const entryIdx = candles5m.findIndex(x => x.time >= entryCandle.time)
+        const entryIdx1m = candles1m?.length ? candles1m.findIndex(x => x.time >= entryCandle.time) : -1
+        const simCandles = entryIdx1m >= 0 && entryIdx1m < candles1m.length - 1
+          ? candles1m.slice(entryIdx1m + 1, entryIdx1m + 400)
+          : candles5m.slice(entryIdx + 1, entryIdx + 200)
+
+        const simResult = simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, 300, entryCandle.time)
+        if (!simResult) continue
+
+        const { outcome, exitPrice: simExit, exitTime } = simResult
+        const pnlPoints = outcome === 'win' ? simExit - entryPrice : -(entryPrice - simExit)
+        const pnlDollars = parseFloat((pnlPoints * multiplier * units).toFixed(2))
+        const rrActual = parseFloat((tpDist / slDist).toFixed(2))
+
+        trades.push({
+          id: trades.length + 1, time: entryCandle.time, exitTime, bias: 'bullish',
+          entryPrice: parseFloat(entryPrice.toFixed(4)),
+          stopPrice: parseFloat(slPrice.toFixed(4)),
+          targetPrice: parseFloat(tpPrice.toFixed(4)),
+          exitPrice: parseFloat(simExit.toFixed(4)),
+          outcome, pnlDollars, rr: rrActual, contracts: units,
+          signal: 'OrderBlock-Retrace',
+        })
+
+        usedOBTimes.add(obCandle.time)
+        usedEntryTimes.add(entryCandle.time)
+        lastExitTime = exitTime || entryCandle.time
+      }
+    }
+  }
+
+  return trades
+}
+
 // ── Combined backtest: merge both strategies, dedup aggressively ─────────────
 function runBacktest(candles5m, candles1m, symbol) {
   const multiplier = CONTRACT_MULTIPLIER[symbol] || 5
@@ -1877,9 +2122,10 @@ function runBacktest(candles5m, candles1m, symbol) {
   // Run highest-WR strategies only (removed: Sweep+BOS, 1m-FVG-TapBack)
   const ifvgTrades     = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
   const liqSweepTrades = runBacktestLiqSweepFVG(candles5m, candles1m || [], symbol, multiplier)
+  const obTrades       = runBacktestOrderBlock(candles5m, candles1m || [], symbol, multiplier)
 
   // Merge, filter to bearish (SHORT) only, sort by entry time
-  const all = [...ifvgTrades, ...liqSweepTrades]
+  const all = [...ifvgTrades, ...liqSweepTrades, ...obTrades]
     .filter(t => t.bias === 'bearish')
     .sort((a, b) => a.time - b.time)
 
@@ -2527,9 +2773,10 @@ function runBacktestLong(candles5m, candles1m, symbol) {
   const ifvgTrades     = runBacktestIFVGMid(candles5m, candles1m || [], symbol, multiplier)
   const tapBackTrades  = runBacktestFVGTapBack(candles5m, candles1m || [], symbol, multiplier)
   const liqSweepTrades = runBacktestLiqSweepFVG(candles5m, candles1m || [], symbol, multiplier, isLongKillZone)
+  const obTrades       = runBacktestOrderBlock(candles5m, candles1m || [], symbol, multiplier, isLongKillZone)
 
   // Filter to only bullish (LONG) trades
-  const allLong = [...ifvgTrades, ...tapBackTrades, ...liqSweepTrades]
+  const allLong = [...ifvgTrades, ...tapBackTrades, ...liqSweepTrades, ...obTrades]
     .filter(t => t.bias === 'bullish')
     .sort((a, b) => a.time - b.time)
 
@@ -2583,12 +2830,13 @@ export default async function handler(req, res) {
     if (sideParam === 'long') {
       // Long backtest — mirrors SHORT strategy (Sweep+BOS + IFVG), filtered to bullish
       if (symbol === 'MGC1!') {
-        // MGC Long: HTF Bias + IFVG Mid + Uptrend FVG Tap-Back + LiqSweep+FVG
+        // MGC Long: HTF Bias + IFVG Mid + Uptrend FVG Tap-Back + LiqSweep+FVG + OrderBlock
         const htfTrades     = runBacktestMGC(candles5m)
         const ifvgTrades    = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
         const tapBackTrades = runBacktestFVGTapBack(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'])
         const liqSweepTrades = runBacktestLiqSweepFVG(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCLongKillZone)
-        const allMGC = [...htfTrades, ...ifvgTrades, ...tapBackTrades, ...liqSweepTrades]
+        const obTrades      = runBacktestOrderBlock(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCLongKillZone)
+        const allMGC = [...htfTrades, ...ifvgTrades, ...tapBackTrades, ...liqSweepTrades, ...obTrades]
           .filter(t => t.bias === 'bullish')
           .sort((a, b) => a.time - b.time)
         // Dedup: no overlapping trades
@@ -2609,12 +2857,13 @@ export default async function handler(req, res) {
     } else {
       // Short backtest (default)
       if (symbol === 'MGC1!') {
-        // MGC: HTF Bias + IFVG Mid Retrace + LiqSweep+FVG, merged with dedup
+        // MGC: HTF Bias + IFVG Mid Retrace + LiqSweep+FVG + OrderBlock, merged with dedup
         const htfTrades   = runBacktestMGC(candles5m)
         const ifvgTrades  = runBacktestIFVGMid(candles5m, candles1m, 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
         const liqSweepTrades = runBacktestLiqSweepFVG(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
+        const obTrades    = runBacktestOrderBlock(candles5m, candles1m || [], 'MGC1!', CONTRACT_MULTIPLIER['MGC1!'], isMGCKillZone)
 
-        const all = [...htfTrades, ...ifvgTrades, ...liqSweepTrades]
+        const all = [...htfTrades, ...ifvgTrades, ...liqSweepTrades, ...obTrades]
           .filter(t => t.bias === 'bearish')
           .sort((a, b) => a.time - b.time)
         trades = []
