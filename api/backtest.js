@@ -27,7 +27,7 @@ const CSV_FILES = {
 const CONTRACT_MULTIPLIER = { 'MES1!': 5, 'MNQ1!': 2, 'MGC1!': 10 }
 // Units (contracts) per trade per symbol
 const UNITS = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
-const MIN_RR = 3
+const MIN_RR = 2
 
 // ── CSV Import (TradingView data) ────────────────────────────────────────────
 function loadCSVCandles(symbol) {
@@ -340,10 +340,10 @@ function findIFVGEntry(candles, fvg, bias) {
 // ── Fixed SL per symbol (null = use sweep wick) ─────────────────────────────
 const FIXED_SL = { 'MES1!': null, 'MNQ1!': 20, 'MGC1!': 20 }
 // ── Fixed TP distance per symbol (null = use R:R calculation) ───────────────
-const FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 60 }      // MGC: 60pt TP / 20pt SL = 3:1 R:R
-const LONG_FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 60 }
-// ── Min R:R per symbol ──────────────────────────────────────────────────────
-const SYMBOL_RR = { 'MES1!': 3, 'MNQ1!': 3, 'MGC1!': 3 }
+const FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 40 }      // MGC: 40pt TP / 20pt SL = 2:1 R:R
+const LONG_FIXED_TP = { 'MES1!': null, 'MNQ1!': null, 'MGC1!': 40 }
+// ── Min R:R per symbol — 2:1 target
+const SYMBOL_RR = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
 // ── Min FVG width for IFVG detection, per symbol ────────────────────────────
 // MGC ~3100 → 3pt, MES ~5500 → 7pt, MNQ ~19000 → 20pt, Silver ~32 → 0.10
 const MIN_FVG_WIDTH = {
@@ -364,7 +364,7 @@ const DEFAULT_SL_BOUNDS = { min: 3, max: 30 }
 // Much tighter TP (1.2:1 RR) so longs actually reach target
 const LONG_MAX_LOSS = 300  // max $300 loss per trade
 // Min payout $300 = 1:1 RR with $300 SL. Trailing stop lets winners run to $1500+
-const LONG_SYMBOL_RR = { 'MES1!': 3, 'MNQ1!': 3, 'MGC1!': 3 }
+const LONG_SYMBOL_RR = { 'MES1!': 2, 'MNQ1!': 2, 'MGC1!': 2 }
 // Fixed SL in points = $300 / (multiplier × contracts)
 const LONG_FIXED_SL  = { 'MES1!': 18, 'MNQ1!': 45, 'MGC1!': 20 }
 const LONG_SL_BOUNDS = {
@@ -397,10 +397,10 @@ function isMGCLongKillZone(ts) {
          (mins >= 420 && mins < 780)   // NY:   7:00 AM – 1:00 PM ET
 }
 
-const MAX_TRADE_DURATION = 21600  // 6 hours in seconds (was 24h — cut slow losers)
+const MAX_TRADE_DURATION = 43200  // 12 hours in seconds — enough time for trades to reach TP
 
 // ── Breakeven stop — when trade moves BE_TRIGGER% toward TP, move SL to entry ─
-const BE_TRIGGER = 0.25  // 25% of TP distance triggers breakeven move (very tight)
+const BE_TRIGGER = 0.5   // 50% of TP distance triggers breakeven move
 const BE_OFFSET  = 0.5   // 0.5-point buffer past entry (covers fees/slippage)
 
 // ── EMA trend filter ────────────────────────────────────────────────────────
@@ -453,120 +453,86 @@ function isVolatileEnough(candles, lookback = 14) {
   return recentATR >= avgATR * MIN_ATR_MULT
 }
 
-// ── Partial TP config ────────────────────────────────────────────────────────
-const PARTIAL_TP_PCT = 0.5   // Take 50% off at partial TP level
-const PARTIAL_TP_RR  = 1.0   // Partial TP at 1:1 R:R — more trades reach this level
-
-// ── SHORT simulation — partial TP + breakeven + full TP ─────────────────────
+// ── SHORT simulation — exit at TP, SL, breakeven, or max duration ───────────
 function simulateShortTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300, entryTime = 0) {
   const tpDist = entryPrice - tpPrice
-  const slDist = slPrice - entryPrice
   if (tpDist <= 0) return null
 
   let currentSL = slPrice
-  const partialTPPrice = entryPrice - slDist * PARTIAL_TP_RR  // 1.5:1 partial TP
-  let partialFilled = false
   let beActivated = false
 
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
 
-    // Max duration — force close
+    // Max duration — force close (never counts as win — must hit TP to win)
     if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
-      const outcome = fc.close < entryPrice ? 'win' : 'loss'
-      return { outcome, exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout', partialFilled }
+      return { outcome: 'breakeven', exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout' }
     }
 
-    // Partial TP: if price reaches partial level, lock in 50% profit and move to BE
-    if (!partialFilled && fc.low <= partialTPPrice) {
-      partialFilled = true
-      beActivated = true
-      currentSL = entryPrice + BE_OFFSET
-    }
-
-    // Breakeven stop (also triggers at BE_TRIGGER if partial not hit yet)
+    // Breakeven stop: if price moved BE_TRIGGER% toward TP, move SL to entry
     if (!beActivated && fc.low <= entryPrice - tpDist * BE_TRIGGER) {
       beActivated = true
       currentSL = entryPrice + BE_OFFSET
     }
 
-    // SL hit
+    // SL hit (price goes UP to hit short SL)
     if (fc.high >= currentSL) {
-      if (partialFilled) {
-        // Partial win: 50% at partial TP price, 50% at breakeven
-        return { outcome: 'win', exitPrice: partialTPPrice, exitTime: fc.time, exitReason: 'partial-tp+be', partialFilled: true }
-      }
       const outcome = beActivated ? 'breakeven' : 'loss'
-      return { outcome, exitPrice: currentSL, exitTime: fc.time, exitReason: beActivated ? 'breakeven-stop' : 'sl', partialFilled }
+      return { outcome, exitPrice: currentSL, exitTime: fc.time, exitReason: beActivated ? 'breakeven-stop' : 'sl' }
     }
 
-    // Full TP hit
+    // TP hit (price goes DOWN to hit short TP) — ONLY way to win
     if (fc.low <= tpPrice) {
-      return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time, exitReason: 'tp', partialFilled }
+      return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time, exitReason: 'tp' }
     }
   }
 
+  // Candle limit — never counts as win
   if (simCandles.length > 0) {
     const lastCandle = simCandles[Math.min(simCandles.length - 1, maxCandles - 1)]
-    const outcome = lastCandle.close < entryPrice ? 'win' : 'loss'
-    return { outcome, exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit', partialFilled }
+    return { outcome: 'breakeven', exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit' }
   }
   return null
 }
 
-// ── LONG simulation — partial TP + breakeven + full TP ──────────────────────
+// ── LONG simulation — exit at TP, SL, breakeven, or max duration ────────────
 function simulateLongTrade(simCandles, entryPrice, slPrice, tpPrice, maxCandles = 300, entryTime = 0) {
   const tpDist = tpPrice - entryPrice
-  const slDist = entryPrice - slPrice
   if (tpDist <= 0) return null
 
   let currentSL = slPrice
-  const partialTPPrice = entryPrice + slDist * PARTIAL_TP_RR  // 1.5:1 partial TP
-  let partialFilled = false
   let beActivated = false
 
   for (let k = 0; k < Math.min(simCandles.length, maxCandles); k++) {
     const fc = simCandles[k]
 
-    // Max duration — force close
+    // Max duration — force close (never counts as win — must hit TP to win)
     if (entryTime > 0 && fc.time - entryTime >= MAX_TRADE_DURATION) {
-      const outcome = fc.close > entryPrice ? 'win' : 'loss'
-      return { outcome, exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout', partialFilled }
+      return { outcome: 'breakeven', exitPrice: fc.close, exitTime: fc.time, exitReason: 'timeout' }
     }
 
-    // Partial TP: if price reaches partial level, lock in 50% profit and move to BE
-    if (!partialFilled && fc.high >= partialTPPrice) {
-      partialFilled = true
-      beActivated = true
-      currentSL = entryPrice - BE_OFFSET
-    }
-
-    // Breakeven stop (also triggers at BE_TRIGGER if partial not hit yet)
+    // Breakeven stop: if price moved BE_TRIGGER% toward TP, move SL to entry
     if (!beActivated && fc.high >= entryPrice + tpDist * BE_TRIGGER) {
       beActivated = true
       currentSL = entryPrice - BE_OFFSET
     }
 
-    // SL hit
+    // SL hit (price goes DOWN to hit long SL)
     if (fc.low <= currentSL) {
-      if (partialFilled) {
-        // Partial win: 50% at partial TP price, 50% at breakeven
-        return { outcome: 'win', exitPrice: partialTPPrice, exitTime: fc.time, exitReason: 'partial-tp+be', partialFilled: true }
-      }
       const outcome = beActivated ? 'breakeven' : 'loss'
-      return { outcome, exitPrice: currentSL, exitTime: fc.time, exitReason: beActivated ? 'breakeven-stop' : 'sl', partialFilled }
+      return { outcome, exitPrice: currentSL, exitTime: fc.time, exitReason: beActivated ? 'breakeven-stop' : 'sl' }
     }
 
-    // Full TP hit
+    // TP hit (price goes UP to hit long TP) — ONLY way to win
     if (fc.high >= tpPrice) {
-      return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time, exitReason: 'tp', partialFilled }
+      return { outcome: 'win', exitPrice: tpPrice, exitTime: fc.time, exitReason: 'tp' }
     }
   }
 
+  // Candle limit — never counts as win
   if (simCandles.length > 0) {
     const lastCandle = simCandles[Math.min(simCandles.length - 1, maxCandles - 1)]
-    const outcome = lastCandle.close > entryPrice ? 'win' : 'loss'
-    return { outcome, exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit', partialFilled }
+    return { outcome: 'breakeven', exitPrice: lastCandle.close, exitTime: lastCandle.time, exitReason: 'candle-limit' }
   }
   return null
 }
